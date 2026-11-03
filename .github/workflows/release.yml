@@ -34,22 +34,43 @@ jobs:
       - name: Patch react-native-track-player (uCar metadata)
         run: node dependencies-patch.js
 
-      # 手动安装 Android SDK/NDK：
+      # 缓存 Android SDK/NDK（含 NDK 26 约 1GB，命中后跳过下载，极大加速）
+      - name: Cache Android SDK & NDK
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/android-sdk
+          key: android-sdk-${{ runner.os }}-ndk26.1.10909125
+
+      # 手动安装 Android SDK/NDK（缓存命中则直接复用，不再下载）
       # setup-android@v3 内部写死 `sdkmanager tools`，而 runner 的 cmdline-tools(16.0) 已移除该包，
       # 必报 "Failed to find package 'tools'" 并退出 1。改用手动安装官方 cmdline-tools，干净可控。
       - name: Setup Android SDK & NDK
         run: |
           ANDROID_SDK_ROOT=/home/runner/android-sdk
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-          curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/cmdtools.zip
-          unzip -q /tmp/cmdtools.zip -d "$ANDROID_SDK_ROOT/cmdline-tools"
-          mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-          export PATH="$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin"
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "platforms;android-36" "build-tools;35.0.0" "ndk;26.1.10909125" "platform-tools"
+          if [ ! -f "$ANDROID_SDK_ROOT/platforms/android-36/android.jar" ]; then
+            mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+            curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/cmdtools.zip
+            unzip -q /tmp/cmdtools.zip -d "$ANDROID_SDK_ROOT/cmdline-tools"
+            mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+            export PATH="$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin"
+            yes | sdkmanager --licenses >/dev/null 2>&1 || true
+            sdkmanager "platforms;android-36" "build-tools;35.0.0" "ndk;26.1.10909125" "platform-tools"
+          else
+            echo "Android SDK cache hit, skip download"
+          fi
           echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
           echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
+
+      # 缓存 Gradle 依赖（~/.gradle），命中后跳过 Maven 依赖下载，加速构建
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'android/build.gradle', 'android/app/build.gradle') }}
 
       - name: Compute version & bump versionCode
         id: vars
