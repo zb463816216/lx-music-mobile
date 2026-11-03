@@ -6,7 +6,6 @@ const defaultSetting: LX.AppSetting = {
   'common.sourceNameType': 'alias',
   'common.shareType': 'system',
   'common.isAgreePact': false,
-  'common.otaAutoCheck': true,
   'common.autoHidePlayBar': true,
   'common.drawerLayoutPosition': 'left',
   'common.homePageScroll': true,
@@ -35,7 +34,6 @@ const defaultSetting: LX.AppSetting = {
   'player.isS2t': false,
   'player.isShowBluetoothLyric': false,
   'player.isShowBluetoothFullLyric': false,
-  'player.isShowCarLyric': false,
 
   // 'playDetail.isZoomActiveLrc': false,
   // 'playDetail.isShowLyricProgressSetting': false,

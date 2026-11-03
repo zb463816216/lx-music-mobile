@@ -37,11 +37,6 @@ declare global {
       'common.isAgreePact': boolean
 
       /**
-       * 是否在启动时自动检查 OTA 更新
-       */
-      'common.otaAutoCheck': boolean
-
-      /**
        * 是否在键盘弹出时隐藏播放栏
        */
       'common.autoHidePlayBar': boolean
@@ -204,11 +199,7 @@ declare global {
       /**
        * 是否启用蓝牙完整歌词
        */
-      'player.isShowBluetoothFullLyric': boolean,
-      /**
-       * 是否启用车载歌词（Jovi InCar 等车机，写自定义 MediaSession 键 UCAR_TITLE / UCAR_ARTIST）
-       */
-      'player.isShowCarLyric': boolean
+      'player.isShowBluetoothFullLyric': boolean
 
       /**
        * 播放详情页-是否缩放当前播放的歌词行

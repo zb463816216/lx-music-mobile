@@ -3,7 +3,6 @@ import BackgroundTimer from 'react-native-background-timer'
 import { playMusic as handlePlayMusic } from './playList'
 import { existsFile, moveFile, privateStorageDirectoryPath, temporaryDirectoryPath } from '@/utils/fs'
 import { toast } from '@/utils/tools'
-import settingState from '@/store/setting/state'
 // import { PlayerMusicInfo } from '@/store/modules/player/playInfo'
 
 
@@ -174,10 +173,9 @@ export interface NowPlayingTitles {
   artist?: string
   album?: string
   lyric?: string
-  /** 车载模式（优先级最高）：只写 ucar.media.metadata.* 字段，不写标准 TITLE/ARTIST/LYRICS */
-  carMode?: boolean
 }
 export const updateNowPlayingTitles = async(titles: NowPlayingTitles) => {
+  // console.log('set playing titles', titles)
   return TrackPlayer.updateNowPlayingTitles(titles)
 }
 

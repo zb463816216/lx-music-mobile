@@ -8,7 +8,6 @@ import { useSettingValue } from '@/store/setting/hook'
 
 import CheckBoxItem from '../../components/CheckBoxItem'
 import { updateNowPlayingTitles } from '@/plugins/player/utils'
-import { setLyricSendState } from '@/core/lyric'
 import playerState from '@/store/player/state'
 
 export default memo(() => {
@@ -17,7 +16,6 @@ export default memo(() => {
   const setShowBluetoothFullLyric = async(isShowBluetoothFullLyric: boolean) => {
     if (isShowBluetoothFullLyric) await remoteLyricTip()
     updateSetting({ 'player.isShowBluetoothFullLyric': isShowBluetoothFullLyric })
-    setLyricSendState()
     if (isShowBluetoothFullLyric && playerState.musicInfo.lrc) {
       void updateNowPlayingTitles({
         lyric: playerState.musicInfo.lrc,

@@ -30,26 +30,20 @@ const patchs = [
         prevMetadata = metadata;`,
   ],
   // ② 逐行 / 设置项刷新：updateTitles
-  // 开关优先级：车载歌词(carMode=true) > 完整蓝牙歌词 > 蓝牙歌词，由 JS 端判定后通过 carMode 标志传入。
-  // carMode=true：只写 ucar.media.metadata.*（标题=当前歌词行、整首歌词），不写标准 TITLE/ARTIST/LYRICS。
-  // carMode 缺失：走标准逐句（title=歌词行、artist=歌名-歌手），并同步 ucar 字段。
+  // 「显示蓝牙歌词」开启时，JS 端逐句把 title=歌词行、artist=歌名-歌手 传下来。
+  // 这里同时写标准字段（蓝牙设备/车机标题位置滚歌词）与 ucar 字段（Jovi InCar 车机读取）。
+  // 依据 vivo 实测：UCAR_ARTIST 不被识别，标准 METADATA_KEY_ARTIST 才被识别，故 artist 始终写标准字段。
   // 整体替换整个 updateTitles 方法。
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
     '    public void updateTitles(Bundle data) {\n      if (prevMetadata == null) return;\n      if (data.containsKey("title")) {\n        prevMetadata.putString(METADATA_KEY_TITLE, data.getString("title"));\n      }\n      if (data.containsKey("artist")) {\n        prevMetadata.putString(METADATA_KEY_ARTIST, data.getString("artist"));\n      }\n      if (data.containsKey("album")) {\n        prevMetadata.putString(METADATA_KEY_ALBUM, data.getString("album"));\n      }\n      if (data.containsKey("lyric")) {\n        prevMetadata.putString("android.media.metadata.LYRICS", data.getString("lyric"));\n      }\n      session.setMetadata(prevMetadata.build());\n      updatePlaybackState(manager.getPlayback());\n    }',
     `    public void updateTitles(Bundle data) {
       if (prevMetadata == null) return;
-      boolean carMode = data.containsKey("carMode") && data.getBoolean("carMode");
       if (data.containsKey("title")) {
-        // 车机标题位置显示歌词：写 ucar.UCAR_TITLE（车机可识别）；标准 TITLE 在车载模式不写、非车载模式写
+        prevMetadata.putString(METADATA_KEY_TITLE, data.getString("title"));
         prevMetadata.putString("ucar.media.metadata.UCAR_TITLE", data.getString("title"));
-        if (!carMode) {
-          prevMetadata.putString(METADATA_KEY_TITLE, data.getString("title"));
-        }
       }
       if (data.containsKey("artist")) {
-        // 车机艺术家位置：vivo 实测 UCAR_ARTIST 不被识别，反而标准 METADATA_KEY_ARTIST 能被识别，
-        // 因此始终写标准 ARTIST（歌手名），不再依赖 UCAR_ARTIST。
         prevMetadata.putString(METADATA_KEY_ARTIST, data.getString("artist"));
         prevMetadata.putString("ucar.media.metadata.UCAR_ARTIST", data.getString("artist"));
       }
@@ -57,10 +51,8 @@ const patchs = [
         prevMetadata.putString(METADATA_KEY_ALBUM, data.getString("album"));
       }
       if (data.containsKey("lyric")) {
+        prevMetadata.putString("android.media.metadata.LYRICS", data.getString("lyric"));
         prevMetadata.putString("ucar.media.metadata.LYRICS_WHOLE", data.getString("lyric"));
-        if (!carMode) {
-          prevMetadata.putString("android.media.metadata.LYRICS", data.getString("lyric"));
-        }
       }
       session.setMetadata(prevMetadata.build());
       updatePlaybackState(manager.getPlayback());
