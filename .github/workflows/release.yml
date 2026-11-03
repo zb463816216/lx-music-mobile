@@ -55,12 +55,22 @@ jobs:
       - name: Build Packages
         env:
           DISABLE_SVG: 1
+          STORE_FILE_BASE64: ${{ secrets.KEYSTORE_STORE_FILE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.KEYSTORE_KEY_ALIAS }}
+          STORE_PWD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PWD: ${{ secrets.KEYSTORE_KEY_PASSWORD }}
         shell: bash
         run: |
           cd android
-          echo ${{ secrets.KEYSTORE_STORE_FILE_BASE64 }} | base64 --decode > ${{ secrets.KEYSTORE_STORE_FILE }}
-          ./gradlew assembleRelease -PMYAPP_UPLOAD_STORE_FILE='${{ secrets.KEYSTORE_STORE_FILE }}' -PMYAPP_UPLOAD_KEY_ALIAS='${{ secrets.KEYSTORE_KEY_ALIAS }}' -PMYAPP_UPLOAD_STORE_PASSWORD='${{ secrets.KEYSTORE_PASSWORD }}' -PMYAPP_UPLOAD_KEY_PASSWORD='${{ secrets.KEYSTORE_KEY_PASSWORD }}'
-          rm -f ${{ secrets.KEYSTORE_STORE_FILE }}
+          # 预检：缺失任何密钥直接报错并指明缺哪个，避免晦涩失败
+          : "${STORE_FILE_BASE64:?❌ 缺少密钥 KEYSTORE_STORE_FILE_BASE64（用 Git Bash 跑 base64 -w0 my-release-key.jks 生成）}"
+          : "${KEY_ALIAS:?❌ 缺少密钥 KEYSTORE_KEY_ALIAS（应填 myKeyAlias）}"
+          : "${STORE_PWD:?❌ 缺少密钥 KEYSTORE_PASSWORD（keystore 密码）}"
+          : "${KEY_PWD:?❌ 缺少密钥 KEYSTORE_KEY_PASSWORD（密钥密码）}"
+          # keystore 文件名写死，不依赖 secret，避免输出目标为空导致 "Is a directory" 错误
+          echo "$STORE_FILE_BASE64" | base64 --decode > my-release-key.jks
+          ./gradlew assembleRelease -PMYAPP_UPLOAD_STORE_FILE='my-release-key.jks' -PMYAPP_UPLOAD_KEY_ALIAS="$KEY_ALIAS" -PMYAPP_UPLOAD_STORE_PASSWORD="$STORE_PWD" -PMYAPP_UPLOAD_KEY_PASSWORD="$KEY_PWD"
+          rm -f my-release-key.jks
 
       - name: Generate file MD5
         run: |
