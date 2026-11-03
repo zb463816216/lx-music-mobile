@@ -2,11 +2,11 @@ import { httpGet } from '@/utils/request'
 import { downloadFile, temporaryDirectoryPath } from '@/utils/fs'
 import { installApk } from '@/utils/nativeModules/utils'
 import { APP_PROVIDER_NAME, OTA_VERSION_URL } from '@/config/constant'
-import { confirmDialog, toast } from '@/utils/tools'
+import { confirmDialog, toast, openUrl } from '@/utils/tools'
 import { compareVer } from '@/utils'
 import settingState from '@/store/setting/state'
-// 读取本应用自身版本号，用于与远端比较
-import { version as currentVersion } from '../../package.json'
+// 读取本应用自身版本号/构建号，用于与远端比较
+import { version as currentVersion, versionCode as currentVersionCode } from '../../package.json'
 import type { OtaInfo } from '@/types/ota'
 
 // 多镜像容错：主用 raw.githubusercontent，备用 jsdelivr CDN
@@ -53,7 +53,12 @@ export const checkOta = async(silent = false) => {
     if (!silent) toast('检查更新失败')
     return
   }
-  if (compareVer(currentVersion, info.version) !== -1) {
+  // 优先用 versionCode 比较：versionName 固定为包版本不变，若用版本字符串会永远判定"有新版本"，
+  // 导致更新装完后仍反复提示更新。versionCode 每次构建 +1，且已随 JS 打进包里。
+  const isLatest = info.versionCode != null
+    ? (currentVersionCode ?? 0) >= info.versionCode
+    : compareVer(currentVersion, info.version) !== -1
+  if (isLatest) {
     if (!silent) toast('已经是最新版本')
     return
   }
@@ -81,10 +86,28 @@ export const downloadOta = async(apkUrl: string) => {
       })
       promise.then(() => resolve()).catch(reject)
     })
-    toast('下载完成，正在安装…')
+  } catch (err) {
+    // 国内直连 GitHub Releases 常失败：兜底让用户用浏览器下载
+    const ok = await confirmDialog({
+      title: '下载失败',
+      message: `可能网络无法访问 GitHub（请检查代理/网络）。\n${(err as Error)?.message ?? String(err)}\n\n是否改用浏览器打开下载链接？`,
+      confirmButtonText: '浏览器下载',
+      cancelButtonText: '取消',
+    })
+    if (ok) void openUrl(apkUrl)
+    return
+  }
+  toast('下载完成，正在安装…')
+  try {
     // 复用应用内置的 FileProvider（authority = com.salt.music.provider）安装 APK
     await installApk(savePath, APP_PROVIDER_NAME)
   } catch (err) {
-    toast('更新失败：' + ((err as Error)?.message ?? String(err)))
+    const ok = await confirmDialog({
+      title: '安装失败',
+      message: `请确认已允许本应用「安装未知应用」权限。\n${(err as Error)?.message ?? String(err)}\n\n是否改用浏览器下载？`,
+      confirmButtonText: '浏览器下载',
+      cancelButtonText: '取消',
+    })
+    if (ok) void openUrl(apkUrl)
   }
 }

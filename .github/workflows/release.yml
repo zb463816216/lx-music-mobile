@@ -144,9 +144,10 @@ jobs:
         run: |
           OTA_VER="${{ env.PACKAGE_VERSION }}.${{ env.NEW_CODE }}"
           OTA_URL="https://github.com/zb463816216/lx-music-mobile/releases/download/${{ env.BUILD_TAG }}/lx-music-mobile-v${{ env.PACKAGE_VERSION }}-universal.apk"
-          node -e "const fs=require('fs');const p='ota/update.json';const j=JSON.parse(fs.readFileSync(p));j.version=process.env.OTA_VER;j.apkUrl=process.env.OTA_URL;fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')"
+          node -e "const fs=require('fs');const p='ota/update.json';const j=JSON.parse(fs.readFileSync(p));j.version=process.env.OTA_VER;j.versionCode=Number(process.env.OTA_CODE);j.apkUrl=process.env.OTA_URL;fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')"
         env:
           OTA_VER: ${{ env.PACKAGE_VERSION }}.${{ env.NEW_CODE }}
+          OTA_CODE: ${{ env.NEW_CODE }}
           OTA_URL: https://github.com/zb463816216/lx-music-mobile/releases/download/${{ env.BUILD_TAG }}/lx-music-mobile-v${{ env.PACKAGE_VERSION }}-universal.apk
 
       # 把本构建使用的 versionCode 写回 package.json 并提交，否则下一轮仍从旧值 +1，导致 APK versionCode 不累加、
