@@ -30,21 +30,54 @@ const patchs = [
         prevMetadata = metadata;`,
   ],
   // ② 逐行 / 设置项刷新：updateTitles
+  // 合并用户 1.7 版逻辑：仅当当前输出为「蓝牙 A2DP」（车机/蓝牙耳机）时，才把标准 TITLE 覆盖为当前歌词行，
+  // 实现车机标题位置滚动歌词；非 A2DP（手机扬声器等）时标准 TITLE 保持歌名不变。
+  // 同时始终同步 uCar(ICCOA) 字段。整体替换整个 updateTitles 方法，避免与"无条件写 TITLE"冲突。
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
-    '      if (data.containsKey("lyric")) {\n        prevMetadata.putString("android.media.metadata.LYRICS", data.getString("lyric"));\n      }\n      session.setMetadata(prevMetadata.build());',
-    `      if (data.containsKey("lyric")) {
-        prevMetadata.putString("android.media.metadata.LYRICS", data.getString("lyric"));
-        prevMetadata.putString("ucar.media.metadata.LYRICS_WHOLE", data.getString("lyric"));
-      }
-      // uCar (ICCOA) 自定义媒体元数据：实时同步标题/艺术家（当前歌词行即 title）
+    '    public void updateTitles(Bundle data) {\n      if (prevMetadata == null) return;\n      if (data.containsKey("title")) {\n        prevMetadata.putString(METADATA_KEY_TITLE, data.getString("title"));\n      }\n      if (data.containsKey("artist")) {\n        prevMetadata.putString(METADATA_KEY_ARTIST, data.getString("artist"));\n      }\n      if (data.containsKey("album")) {\n        prevMetadata.putString(METADATA_KEY_ALBUM, data.getString("album"));\n      }\n      if (data.containsKey("lyric")) {\n        prevMetadata.putString("android.media.metadata.LYRICS", data.getString("lyric"));\n      }\n      session.setMetadata(prevMetadata.build());\n      updatePlaybackState(manager.getPlayback());\n    }',
+    `    public void updateTitles(Bundle data) {
+      if (prevMetadata == null) return;
+      // 判断当前是否蓝牙 A2DP 输出（车机/蓝牙耳机）。是才把「标准标题」写成当前歌词行。
+      boolean isA2dp = false;
+      try {
+        android.media.AudioManager am = (android.media.AudioManager) service.getSystemService(android.content.Context.AUDIO_SERVICE);
+        if (am != null) {
+          if (android.os.Build.VERSION.SDK_INT >= 23) {
+            android.media.AudioDeviceInfo[] devs = am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS);
+            for (android.media.AudioDeviceInfo d : devs) {
+              if (d.getType() == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP) { isA2dp = true; break; }
+            }
+          } else if (am.isBluetoothA2dpOn()) {
+            isA2dp = true;
+          }
+        }
+      } catch (Throwable ignored) {}
       if (data.containsKey("title")) {
+        // uCar 标题始终同步（当前歌词行即 title）
         prevMetadata.putString("ucar.media.metadata.UCAR_TITLE", data.getString("title"));
+        // 仅蓝牙 A2DP 时，把标准标题也改为歌词行，实现车机标题位置滚歌词；否则保持歌名
+        if (isA2dp) {
+          prevMetadata.putString(METADATA_KEY_TITLE, data.getString("title"));
+        }
       }
       if (data.containsKey("artist")) {
         prevMetadata.putString("ucar.media.metadata.UCAR_ARTIST", data.getString("artist"));
+        // 标准 artist 仅在 A2DP 时覆盖为「歌名 - 歌手」，非 A2DP 保持原歌手
+        if (isA2dp) {
+          prevMetadata.putString(METADATA_KEY_ARTIST, data.getString("artist"));
+        }
       }
-      session.setMetadata(prevMetadata.build());`,
+      if (data.containsKey("album")) {
+        prevMetadata.putString(METADATA_KEY_ALBUM, data.getString("album"));
+      }
+      if (data.containsKey("lyric")) {
+        prevMetadata.putString("android.media.metadata.LYRICS", data.getString("lyric"));
+        prevMetadata.putString("ucar.media.metadata.LYRICS_WHOLE", data.getString("lyric"));
+      }
+      session.setMetadata(prevMetadata.build());
+      updatePlaybackState(manager.getPlayback());
+    }`,
   ],
 ]
 
