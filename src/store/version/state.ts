@@ -9,6 +9,8 @@ export interface VersionInfo {
   version: string
   desc: string
   history?: LX.VersionInfo[]
+  /** 自定义 OTA 的 APK 直链（供弹窗内「更新」按钮下载使用） */
+  apkUrl?: string
 }
 
 export interface InitState {
