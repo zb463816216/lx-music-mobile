@@ -174,6 +174,8 @@ export interface NowPlayingTitles {
   artist?: string
   album?: string
   lyric?: string
+  /** 车载模式（优先级最高）：只写 ucar.media.metadata.* 字段，不写标准 TITLE/ARTIST/LYRICS */
+  carMode?: boolean
 }
 export const updateNowPlayingTitles = async(titles: NowPlayingTitles) => {
   return TrackPlayer.updateNowPlayingTitles(titles)
