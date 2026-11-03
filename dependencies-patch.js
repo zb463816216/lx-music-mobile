@@ -16,20 +16,15 @@ const patchs = [
   // 标题/艺术家由 track 自带，始终写入；整首歌词来自 JS 传入的 lyric 字段
   // （「车载歌词」或「显示完整蓝牙歌词」开启时，playList.ts 把整首 lrc 作为 lyric 传下来）。
   // ① 切歌 / 整曲元数据：updateMetadata
-  // 实测结论（vivo Jovi InCar 车机）：
-  //   UCAR_TITLE   被识别 → 显示在「标题」位置，应为「歌名 - 歌手」
-  //   LYRICS_WHOLE 被识别 → 显示在「歌词」位置，应为整首 LRC（车机自行滚动）
-  //   UCAR_ARTIST / LYRICS_LINE 不被识别（可省略）
+  // 反编译旧版 APK 确认：UCAR_TITLE=纯歌名（不拼歌手）、UCAR_ARTIST=歌手、LYRICS_WHOLE=整首LRC。
+  // 车机把 UCAR_TITLE(歌名) + 标准METADATA_KEY_ARTIST(歌手) 拼成一行显示「歌名 - 歌手」，不重复。
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
     '        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();\n        prevMetadata = metadata;',
     `        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();
-        // uCar (ICCOA) 媒体元数据：标题位放「歌名 - 歌手」，歌词位放整首 LRC
-        String carTitle = track.title;
-        if (track.artist != null && !track.artist.isEmpty()) {
-          carTitle = track.title + " - " + track.artist;
-        }
-        metadata.putString("ucar.media.metadata.UCAR_TITLE", carTitle);
+        // uCar (ICCOA) 媒体元数据（对齐旧版）：标题位纯歌名、歌手位歌手、歌词位整首LRC
+        metadata.putString("ucar.media.metadata.UCAR_TITLE", track.title);
+        metadata.putString("ucar.media.metadata.UCAR_ARTIST", track.artist);
         if (track.lyric != null) {
           metadata.putString("ucar.media.metadata.LYRICS_WHOLE", track.lyric);
           metadata.putLong("ucar.media.metadata.LYRICS_STATUS", 0L);
@@ -37,9 +32,8 @@ const patchs = [
         prevMetadata = metadata;`,
   ],
   // ② 逐行 / 设置项刷新：updateTitles
-  // 标准字段（title=歌词行、artist=歌名-歌手）给普通蓝牙设备滚标题；
-  // ucar.UCAR_TITLE 写「歌名 - 歌手」（= data.artist），车机标题位保持不变，
-  // 整首歌词 LYRICS_WHOLE 在切歌时已由 updateMetadata 写入，这里不动。
+  // 反编译旧版 APK 确认：逐句时只写标准字段（TITLE=歌词行、ARTIST=歌名-歌手），
+  // 不写任何 ucar 字段（uCar 字段在切歌时 updateMetadata 已写入，逐句不覆盖，保持稳定）。
   // 整体替换整个 updateTitles 方法。
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
@@ -57,7 +51,6 @@ const patchs = [
       }
       if (data.containsKey("lyric")) {
         prevMetadata.putString("android.media.metadata.LYRICS", data.getString("lyric"));
-        prevMetadata.putString("ucar.media.metadata.LYRICS_WHOLE", data.getString("lyric"));
       }
       session.setMetadata(prevMetadata.build());
       updatePlaybackState(manager.getPlayback());
