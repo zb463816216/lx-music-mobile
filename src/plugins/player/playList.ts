@@ -33,11 +33,9 @@ const formatMusicInfo = (musicInfo: LX.Player.PlayMusic) => {
 }
 
 const getCurrentFullLyric = (targetId: string | null) => {
-  // 「显示蓝牙歌词」或「显示完整蓝牙歌词」任一开启，都下发整首 LRC，
-  // 供原生补丁写成 ucar.media.metadata.LYRICS_WHOLE 给 Jovi InCar 车机滚歌词。
-  const isBtLyric = settingState.setting['player.isShowBluetoothLyric']
+  // 仅「显示完整蓝牙歌词」开启时下发整首 LRC（写 ucar LYRICS_WHOLE 给车机滚歌词）
   const isFullLyric = settingState.setting['player.isShowBluetoothFullLyric']
-  return ((isBtLyric || isFullLyric) && targetId &&
+  return (isFullLyric && targetId &&
       playerState.musicInfo.id == targetId && playerState.musicInfo.lrc)
     ? playerState.musicInfo.lrc
     : undefined

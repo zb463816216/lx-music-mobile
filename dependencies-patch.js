@@ -51,8 +51,6 @@ const patchs = [
       }
       if (data.containsKey("artist")) {
         prevMetadata.putString(METADATA_KEY_ARTIST, data.getString("artist"));
-        // 车机标题位：artist 字段即「歌名 - 歌手」
-        prevMetadata.putString("ucar.media.metadata.UCAR_TITLE", data.getString("artist"));
       }
       if (data.containsKey("album")) {
         prevMetadata.putString(METADATA_KEY_ALBUM, data.getString("album"));
