@@ -15,57 +15,52 @@ const patchs = [
   //   ucar.media.metadata.LYRICS_STATUS    歌词状态 0成功/1无/2加载中/3失败
   // 标题/艺术家由 track 自带，始终写入；整首歌词来自 JS 传入的 lyric 字段
   // （「车载歌词」或「显示完整蓝牙歌词」开启时，playList.ts 把整首 lrc 作为 lyric 传下来）。
-  // ① 切歌 / 整曲元数据：updateMetadata（测试版：固定字段值）
+  // ① 切歌 / 整曲元数据：updateMetadata
+  // 实测结论（vivo Jovi InCar 车机）：
+  //   UCAR_TITLE   被识别 → 显示在「标题」位置，应为「歌名 - 歌手」
+  //   LYRICS_WHOLE 被识别 → 显示在「歌词」位置，应为整首 LRC（车机自行滚动）
+  //   UCAR_ARTIST / LYRICS_LINE 不被识别（可省略）
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
     '        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();\n        prevMetadata = metadata;',
     `        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();
-        // 【测试版】uCar 固定字段值，切歌时即可在车机看到
-        metadata.putString("ucar.media.metadata.UCAR_TITLE", "TIT:标题");
-        metadata.putString("ucar.media.metadata.UCAR_ARTIST", "ART:歌手");
-        metadata.putString("ucar.media.metadata.LYRICS_LINE", "LINE:单句歌词");
-        metadata.putString("ucar.media.metadata.LYRICS_WHOLE", "WHOLE:整首歌词");
-        metadata.putLong("ucar.media.metadata.LYRICS_STATUS", 0L);
+        // uCar (ICCOA) 媒体元数据：标题位放「歌名 - 歌手」，歌词位放整首 LRC
+        String carTitle = track.title;
+        if (track.artist != null && !track.artist.isEmpty()) {
+          carTitle = track.title + " - " + track.artist;
+        }
+        metadata.putString("ucar.media.metadata.UCAR_TITLE", carTitle);
+        if (track.lyric != null) {
+          metadata.putString("ucar.media.metadata.LYRICS_WHOLE", track.lyric);
+          metadata.putLong("ucar.media.metadata.LYRICS_STATUS", 0L);
+        }
         prevMetadata = metadata;`,
   ],
   // ② 逐行 / 设置项刷新：updateTitles
-  // 【测试版】固定字段值，用于在车机上定位「哪个 ucar 字段被识别、显示在哪个位置」。
-  // 确认后把固定值改回真实数据（title/artist/lyric 从 data 取值）即可。
-  // 字段清单（对照 vivo 实测）：
-  //   UCAR_TITLE   -> "TIT:标题"    (标题位置)
-  //   UCAR_ARTIST  -> "ART:歌手"    (艺术家位置)
-  //   LYRICS_LINE  -> "LINE:单句歌词" (单句歌词，逐句滚动)
-  //   LYRICS_WHOLE -> "WHOLE:整首歌词" (整首 LRC)
-  //   LYRICS_STATUS-> 0
+  // 标准字段（title=歌词行、artist=歌名-歌手）给普通蓝牙设备滚标题；
+  // ucar.UCAR_TITLE 写「歌名 - 歌手」（= data.artist），车机标题位保持不变，
+  // 整首歌词 LYRICS_WHOLE 在切歌时已由 updateMetadata 写入，这里不动。
   // 整体替换整个 updateTitles 方法。
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
     '    public void updateTitles(Bundle data) {\n      if (prevMetadata == null) return;\n      if (data.containsKey("title")) {\n        prevMetadata.putString(METADATA_KEY_TITLE, data.getString("title"));\n      }\n      if (data.containsKey("artist")) {\n        prevMetadata.putString(METADATA_KEY_ARTIST, data.getString("artist"));\n      }\n      if (data.containsKey("album")) {\n        prevMetadata.putString(METADATA_KEY_ALBUM, data.getString("album"));\n      }\n      if (data.containsKey("lyric")) {\n        prevMetadata.putString("android.media.metadata.LYRICS", data.getString("lyric"));\n      }\n      session.setMetadata(prevMetadata.build());\n      updatePlaybackState(manager.getPlayback());\n    }',
     `    public void updateTitles(Bundle data) {
       if (prevMetadata == null) return;
-      // 【测试版】固定字段值，车机上可据此定位字段与位置
-      String testTitle = "TIT:标题";
-      String testArtist = "ART:歌手";
-      String testLine = "LINE:单句歌词";
-      String testWhole = "WHOLE:整首歌词";
       if (data.containsKey("title")) {
-        prevMetadata.putString(METADATA_KEY_TITLE, testTitle);
-        prevMetadata.putString("ucar.media.metadata.UCAR_TITLE", testTitle);
+        prevMetadata.putString(METADATA_KEY_TITLE, data.getString("title"));
       }
       if (data.containsKey("artist")) {
-        prevMetadata.putString(METADATA_KEY_ARTIST, testArtist);
-        prevMetadata.putString("ucar.media.metadata.UCAR_ARTIST", testArtist);
+        prevMetadata.putString(METADATA_KEY_ARTIST, data.getString("artist"));
+        // 车机标题位：artist 字段即「歌名 - 歌手」
+        prevMetadata.putString("ucar.media.metadata.UCAR_TITLE", data.getString("artist"));
       }
       if (data.containsKey("album")) {
         prevMetadata.putString(METADATA_KEY_ALBUM, data.getString("album"));
       }
       if (data.containsKey("lyric")) {
-        prevMetadata.putString("android.media.metadata.LYRICS", testWhole);
-        prevMetadata.putString("ucar.media.metadata.LYRICS_WHOLE", testWhole);
+        prevMetadata.putString("android.media.metadata.LYRICS", data.getString("lyric"));
+        prevMetadata.putString("ucar.media.metadata.LYRICS_WHOLE", data.getString("lyric"));
       }
-      // 单句歌词字段（逐句滚动）
-      prevMetadata.putString("ucar.media.metadata.LYRICS_LINE", testLine);
-      prevMetadata.putLong("ucar.media.metadata.LYRICS_STATUS", 0L);
       session.setMetadata(prevMetadata.build());
       updatePlaybackState(manager.getPlayback());
     }`,
