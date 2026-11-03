@@ -78,10 +78,12 @@ jobs:
           : "${KEY_ALIAS:?❌ 缺少密钥 KEYSTORE_KEY_ALIAS（应填 myKeyAlias）}"
           : "${STORE_PWD:?❌ 缺少密钥 KEYSTORE_PASSWORD（keystore 密码）}"
           : "${KEY_PWD:?❌ 缺少密钥 KEYSTORE_KEY_PASSWORD（密钥密码）}"
-          # keystore 文件名写死，不依赖 secret，避免输出目标为空导致 "Is a directory" 错误
-          echo "$STORE_FILE_BASE64" | base64 --decode > my-release-key.jks
-          ./gradlew assembleRelease -PMYAPP_UPLOAD_STORE_FILE='my-release-key.jks' -PMYAPP_UPLOAD_KEY_ALIAS="$KEY_ALIAS" -PMYAPP_UPLOAD_STORE_PASSWORD="$STORE_PWD" -PMYAPP_UPLOAD_KEY_PASSWORD="$KEY_PWD"
-          rm -f my-release-key.jks
+          # 注意：app/build.gradle 里 storeFile file(MYAPP_UPLOAD_STORE_FILE) 是相对 app 模块目录(android/app/)解析的，
+          # 传相对名会去 android/app/ 找而报 "Keystore file ... not found"。这里统一用绝对路径，彻底避免歧义。
+          KS_PATH="$PWD/my-release-key.jks"
+          echo "$STORE_FILE_BASE64" | base64 --decode > "$KS_PATH"
+          ./gradlew assembleRelease -PMYAPP_UPLOAD_STORE_FILE="$KS_PATH" -PMYAPP_UPLOAD_KEY_ALIAS="$KEY_ALIAS" -PMYAPP_UPLOAD_STORE_PASSWORD="$STORE_PWD" -PMYAPP_UPLOAD_KEY_PASSWORD="$KEY_PWD"
+          rm -f "$KS_PATH"
 
       - name: Generate file MD5
         run: |
