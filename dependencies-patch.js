@@ -41,18 +41,17 @@ const patchs = [
       if (prevMetadata == null) return;
       boolean carMode = data.containsKey("carMode") && data.getBoolean("carMode");
       if (data.containsKey("title")) {
-        // uCar 标题始终同步（当前歌词行即 title）
+        // 车机标题位置显示歌词：写 ucar.UCAR_TITLE（车机可识别）；标准 TITLE 在车载模式不写、非车载模式写
         prevMetadata.putString("ucar.media.metadata.UCAR_TITLE", data.getString("title"));
-        // 非车载模式才写标准 TITLE（车载模式只写 ucar，不污染标准标题）
         if (!carMode) {
           prevMetadata.putString(METADATA_KEY_TITLE, data.getString("title"));
         }
       }
       if (data.containsKey("artist")) {
+        // 车机艺术家位置：vivo 实测 UCAR_ARTIST 不被识别，反而标准 METADATA_KEY_ARTIST 能被识别，
+        // 因此始终写标准 ARTIST（歌手名），不再依赖 UCAR_ARTIST。
+        prevMetadata.putString(METADATA_KEY_ARTIST, data.getString("artist"));
         prevMetadata.putString("ucar.media.metadata.UCAR_ARTIST", data.getString("artist"));
-        if (!carMode) {
-          prevMetadata.putString(METADATA_KEY_ARTIST, data.getString("artist"));
-        }
       }
       if (data.containsKey("album")) {
         prevMetadata.putString(METADATA_KEY_ALBUM, data.getString("album"));

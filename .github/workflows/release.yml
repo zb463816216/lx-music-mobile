@@ -55,7 +55,10 @@ jobs:
         id: vars
         run: |
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
-          NEW_CODE=$(( $(node -p "require('./package.json').versionCode || 1000079") + 1 ))
+          # versionCode 用 Unix 秒级时间戳：严格单调递增、与本次构建天然一一对应，
+          # 避免「读旧值 +1」在多次并发/时序错位时，出现 apkUrl 与 versionCode 不一致、
+          # 进而导致「当前版本高于下载版本，无法安装」的问题。
+          NEW_CODE=$(date +%s)
           BUILD_TAG="v${PACKAGE_VERSION}-${GITHUB_SHA::7}"
           node -e "const fs=require('fs');const p='package.json';const j=JSON.parse(fs.readFileSync(p));j.versionCode=${NEW_CODE};fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')"
           echo "package_version=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
