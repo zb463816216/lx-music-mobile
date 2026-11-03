@@ -10,6 +10,7 @@ import com.reactnativenavigation.react.NavigationReactNativeHost;
 import java.util.List;
 
 import com.salt.music.cache.CachePackage;
+import com.salt.music.carmode.CarModePackage;
 import com.salt.music.crypto.CryptoPackage;
 import com.salt.music.lyric.LyricPackage;
 import com.salt.music.userApi.UserApiPackage;
@@ -31,6 +32,7 @@ public class MainApplication extends NavigationApplication {
           // Packages that cannot be autolinked yet can be added manually here, for example:
           // packages.add(new MyReactNativePackage());
           packages.add(new CachePackage());
+          packages.add(new CarModePackage());
           packages.add(new LyricPackage());
           packages.add(new UtilsPackage());
           packages.add(new CryptoPackage());

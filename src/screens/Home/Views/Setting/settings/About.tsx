@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import { View, TouchableOpacity } from 'react-native'
+import { View, TouchableOpacity, Alert } from 'react-native'
 
 import Section from '../components/Section'
 // import Button from './components/Button'
@@ -13,6 +13,7 @@ import { showPactModal, updateSetting } from '@/core/common'
 import { useSettingValue } from '@/store/setting/hook'
 import CheckBoxItem from '../components/CheckBoxItem'
 import { checkOta } from '@/utils/ota'
+import { getCarDiagnostics, isCarModeModuleAvailable } from '@/utils/nativeModules/carMode'
 
 // const qqGroupUrl = 'mqqopensdkapi://bizAgent/qm/qr?url=http%3A%2F%2Fqm.qq.com%2Fcgi-bin%2Fqm%2Fqr%3Ffrom%3Dapp%26p%3Dandroid%26jump_from%3Dwebapi%26k%3Du1zyxek8roQAwic44nOkBXtG9CfbAxFw'
 // const qqGroupUrl2 = 'mqqopensdkapi://bizAgent/qm/qr?url=http%3A%2F%2Fqm.qq.com%2Fcgi-bin%2Fqm%2Fqr%3Ffrom%3Dapp%26p%3Dandroid%26jump_from%3Dwebapi%26k%3D-l4kNZ2bPQAuvfCQFFhl1UoibvF5wcrQ'
@@ -46,6 +47,43 @@ export default memo(() => {
   const otaAutoCheck = useSettingValue('common.otaAutoCheck')
   const setOtaAutoCheck = (v: boolean) => updateSetting({ 'common.otaAutoCheck': v })
   const checkOtaNow = () => void checkOta(false)
+
+  // 车载检测诊断：把系统车载模式/音频路由/USB/蓝牙名一次性打印出来，供真车实测判定
+  const runCarDiag = async() => {
+    if (!isCarModeModuleAvailable()) {
+      Alert.alert('车载检测诊断', '当前安装包未包含诊断模块，请安装重新构建的 APK 后再试')
+      return
+    }
+    try {
+      const d = await getCarDiagnostics()
+      const audio = d.audioOutputs.map(a => a.type).join(', ') || '无'
+      const usb = d.usbDevices.length
+        ? d.usbDevices.map(u => `${u.vendorId}:${u.productId} ${u.manufacturerName || ''}/${u.productName || ''}`.trim()).join('\n')
+        : '无'
+      const bt = d.btBonded.length
+        ? d.btBonded.map(b => b.name || b.address).join('\n')
+        : (d.btError || '无')
+      const msg = [
+        `系统车载模式: ${d.isCarMode ? '是' : '否'} (uiMode=${d.uiMode})`,
+        `USB音频:${d.hasUsbAudio ? '有' : '无'}  蓝牙A2DP:${d.hasA2dp ? '有' : '无'}  Dock:${d.hasDock ? '有' : '无'}`,
+        `插电充电: ${d.isCharging ? '是' : '否'}`,
+        '',
+        `音频输出: ${audio}`,
+        '',
+        `USB 设备(${d.usbDevices.length}):`,
+        usb,
+        '',
+        `蓝牙已配对(${d.btBonded.length}):`,
+        bt,
+        '',
+        `机型: ${d.manufacturer} ${d.model} · Android ${d.sdkInt}`,
+      ].join('\n')
+      console.log('[CarDiagnostics]', JSON.stringify(d, null, 2))
+      Alert.alert('车载检测诊断', msg)
+    } catch (e) {
+      Alert.alert('车载检测诊断失败', String(e))
+    }
+  }
 
   // const goToQQGroup = () => {
   //   openUrl(qqGroupUrl).catch(() => {
@@ -127,6 +165,11 @@ export default memo(() => {
       </View>
       <View style={styles.part}>
         <CheckBoxItem check={otaAutoCheck} onChange={setOtaAutoCheck} label={t('setting_ota_auto_check')} />
+      </View>
+      <View style={styles.part}>
+        <TouchableOpacity onPress={runCarDiag}>
+          <Text style={textLinkStyle}>车载检测诊断</Text>
+        </TouchableOpacity>
       </View>
     </Section>
   )

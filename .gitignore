@@ -67,3 +67,6 @@ buck-out/
 
 # testing
 /coverage
+
+# CI 构建产物（download-artifact 目录），禁止提交，避免 APK 撑大仓库
+/artifacts

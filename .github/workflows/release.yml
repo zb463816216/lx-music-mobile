@@ -159,6 +159,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
+          # 只提交 OTA 元数据与 versionCode，绝不能 git add -A（否则会把 artifacts/ 里的 APK 一起提交进仓库）
+          git add package.json ota/update.json
           git commit -m "chore: bump versionCode & update OTA [skip ci]" || echo "nothing to commit"
           git push
