@@ -33,9 +33,8 @@ const formatMusicInfo = (musicInfo: LX.Player.PlayMusic) => {
 }
 
 const getCurrentFullLyric = (targetId: string | null) => {
-  const isCarLyric = settingState.setting['player.isShowCarLyric']
-  const isFullLyric = settingState.setting['player.isShowBluetoothFullLyric']
-  return ((isCarLyric || isFullLyric) && targetId &&
+  // 车载歌词功能已屏蔽：恢复为原版逻辑（仅「显示完整蓝牙歌词」时携带整首 LRC）
+  return (settingState.setting['player.isShowBluetoothFullLyric'] && targetId &&
       playerState.musicInfo.id == targetId && playerState.musicInfo.lrc)
     ? playerState.musicInfo.lrc
     : undefined

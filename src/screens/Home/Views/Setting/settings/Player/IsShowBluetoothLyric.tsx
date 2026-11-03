@@ -7,7 +7,7 @@ import { useSettingValue } from '@/store/setting/hook'
 
 
 import CheckBoxItem from '../../components/CheckBoxItem'
-import { setLyricSendState } from '@/core/lyric'
+import { showRemoteLyric } from '@/core/desktopLyric'
 import { setLastLyric } from '@/core/player/playInfo'
 import { updateNowPlayingTitles } from '@/plugins/player/utils'
 import playerState from '@/store/player/state'
@@ -20,7 +20,8 @@ export default memo(() => {
       await remoteLyricTip()
     }
     updateSetting({ 'player.isShowBluetoothLyric': isShowBluetoothLyric })
-    setLyricSendState()
+    // 车载歌词已屏蔽，恢复原版：蓝牙歌词直接控制原生逐句发送
+    void showRemoteLyric(isShowBluetoothLyric)
     if (!isShowBluetoothLyric) {
       setLastLyric()
       void updateNowPlayingTitles({

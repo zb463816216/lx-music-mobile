@@ -35,7 +35,9 @@ const state: InitState = {
     reCheck: false,
     isUnknown: false,
     isLatest: false,
-    status: 'checking',
+    // 初始不置为 checking：本 fork 用自定义 OTA(checkOta)，不会驱动该状态，
+    // 若初始为 checking，「版本」页会永久显示「检查更新中」。改为 idle，等实际检查再切状态
+    status: 'idle',
   },
   ignoreVersion: null,
   progress: {

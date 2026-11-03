@@ -55,6 +55,16 @@ export default memo(() => {
           break
         // case 'idle':
         //   break
+        case 'idle':
+          // 未检查过：显示「检查更新」；已拿到更新信息：显示「发现新版本」
+          if (versionInfo.newVersion) {
+            setTitle(t('version_title_new'))
+            setTip('')
+          } else {
+            setTitle(t('setting_check_update'))
+            setTip('')
+          }
+          break
         default:
           setTitle(t('version_title_new'))
           setTip('')

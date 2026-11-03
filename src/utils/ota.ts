@@ -18,7 +18,7 @@ const mirrors: string[] = [
 ]
 
 const requestText = (url: string) =>
-  new Promise<string>((resolve, reject) => {
+  new Promise<unknown>((resolve, reject) => {
     httpGet(url, { timeout: 10000 }, (err, resp, body) => {
       if (err || resp?.statusCode !== 200) reject(err ?? new Error('HTTP ' + (resp?.statusCode ?? '?')))
       else resolve(body)
@@ -28,8 +28,10 @@ const requestText = (url: string) =>
 export const getOtaInfo = async(index = 0): Promise<OtaInfo> => {
   if (index >= mirrors.length) throw new Error('OTA: 无法获取更新信息')
   try {
-    const body = await requestText(mirrors[index])
-    const info = JSON.parse(body) as OtaInfo
+    const raw = await requestText(mirrors[index])
+    // 注意：request.js 的 fetchData 会把合法 JSON 的 body 自动 parse 成对象，
+    // 这里必须兼容「对象 / 字符串」两种形态，否则对对象再 JSON.parse 会抛错导致永远失败
+    const info = (typeof raw === 'string' ? JSON.parse(raw) : raw) as OtaInfo
     if (!info?.version || !info?.apkUrl) throw new Error('OTA: 数据异常')
     return info
   } catch (err) {
@@ -43,6 +45,7 @@ export const getOtaInfo = async(index = 0): Promise<OtaInfo> => {
  */
 export const checkOta = async(silent = false) => {
   if (silent && !settingState.setting['common.otaAutoCheck']) return
+  if (!silent) toast('检查更新中…')
   let info: OtaInfo
   try {
     info = await getOtaInfo()
