@@ -14,6 +14,9 @@ jobs:
   Android:
     name: Build APK
     runs-on: ubuntu-latest
+    # 防自触发死循环：GitHub Actions 不认 [skip ci] 提交信息，故靠 if 守卫——
+    # 仅手动触发、或提交信息不含 "skip ci"（即上游同步的提交）时才构建，自身 push 的 skip ci 提交会被跳过
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, 'skip ci')
     outputs:
       package_version: ${{ steps.vars.outputs.package_version }}
       new_code: ${{ steps.vars.outputs.new_code }}
@@ -31,14 +34,22 @@ jobs:
       - name: Patch react-native-track-player (uCar metadata)
         run: node dependencies-patch.js
 
+      # 手动安装 Android SDK/NDK：
+      # setup-android@v3 内部写死 `sdkmanager tools`，而 runner 的 cmdline-tools(16.0) 已移除该包，
+      # 必报 "Failed to find package 'tools'" 并退出 1。改用手动安装官方 cmdline-tools，干净可控。
       - name: Setup Android SDK & NDK
-        uses: android-actions/setup-android@v3
-      - name: Install SDK packages
         run: |
+          ANDROID_SDK_ROOT=/home/runner/android-sdk
+          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+          curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/cmdtools.zip
+          unzip -q /tmp/cmdtools.zip -d "$ANDROID_SDK_ROOT/cmdline-tools"
+          mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          export PATH="$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin"
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "platforms;android-36" "build-tools;35.0.0" "ndk;26.1.10909125" "cmake;3.22.1.1" "platform-tools"
-          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+          sdkmanager "platforms;android-36" "build-tools;35.0.0" "ndk;26.1.10909125" "platform-tools"
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
 
       - name: Compute version & bump versionCode
         id: vars
@@ -86,6 +97,7 @@ jobs:
     name: Release & OTA
     runs-on: ubuntu-latest
     needs: [Android]
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, 'skip ci')
     env:
       PACKAGE_VERSION: ${{ needs.Android.outputs.package_version }}
       BUILD_TAG: ${{ needs.Android.outputs.build_tag }}
@@ -134,6 +146,12 @@ jobs:
         env:
           OTA_VER: ${{ env.PACKAGE_VERSION }}.${{ env.NEW_CODE }}
           OTA_URL: https://github.com/zb463816216/lx-music-mobile/releases/download/${{ env.BUILD_TAG }}/lx-music-mobile-v${{ env.PACKAGE_VERSION }}-universal.apk
+
+      # 把本构建使用的 versionCode 写回 package.json 并提交，否则下一轮仍从旧值 +1，导致 APK versionCode 不累加、
+      # 用户已装旧版时系统拒绝覆盖安装（OTA 提示有更新却装不上）
+      - name: Persist versionCode
+        run: |
+          node -e "const fs=require('fs');const p='package.json';const j=JSON.parse(fs.readFileSync(p));j.versionCode=${{ needs.Android.outputs.new_code }};fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')"
 
       - name: Commit OTA & versionCode [skip ci]
         run: |
