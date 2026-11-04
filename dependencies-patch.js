@@ -31,28 +31,56 @@ const patchs = [
         }
         prevMetadata = metadata;`,
   ],
-  // ② 逐行 / 设置项刷新：updateTitles
-  // 反编译旧版 APK 确认：逐句时只写标准字段（TITLE=歌词行、ARTIST=歌名-歌手），
-  // 不写任何 ucar 字段（uCar 字段在切歌时 updateMetadata 已写入，逐句不覆盖，保持稳定）。
+  // ② 逐行 / 设置项刷新：updateTitles（完全复刻旧版 r() = updateNowPlayingTitles）
+  // 旧版逻辑：isBluetoothA2dpOn → 找 A2DP 设备 → 新建 Builder → 只写标准字段 → 整条替换。
+  // 不写 ucar 字段（ucar 在切歌时 updateMetadata 写入，逐句被替换后由 updatePlayback 恢复 prevMetadata）。
+  // lyric 字段单独处理：写入 prevMetadata（供 LYRICS_WHOLE 更新）。
   // 整体替换整个 updateTitles 方法。
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
     '    public void updateTitles(Bundle data) {\n      if (prevMetadata == null) return;\n      if (data.containsKey("title")) {\n        prevMetadata.putString(METADATA_KEY_TITLE, data.getString("title"));\n      }\n      if (data.containsKey("artist")) {\n        prevMetadata.putString(METADATA_KEY_ARTIST, data.getString("artist"));\n      }\n      if (data.containsKey("album")) {\n        prevMetadata.putString(METADATA_KEY_ALBUM, data.getString("album"));\n      }\n      if (data.containsKey("lyric")) {\n        prevMetadata.putString("android.media.metadata.LYRICS", data.getString("lyric"));\n      }\n      session.setMetadata(prevMetadata.build());\n      updatePlaybackState(manager.getPlayback());\n    }',
     `    public void updateTitles(Bundle data) {
       if (prevMetadata == null) return;
-      if (data.containsKey("title")) {
-        prevMetadata.putString(METADATA_KEY_TITLE, data.getString("title"));
-      }
-      if (data.containsKey("artist")) {
-        prevMetadata.putString(METADATA_KEY_ARTIST, data.getString("artist"));
-      }
-      if (data.containsKey("album")) {
-        prevMetadata.putString(METADATA_KEY_ALBUM, data.getString("album"));
-      }
+      // lyric 字段：写入 prevMetadata（LYRICS_WHOLE 更新，不参与逐句替换）
       if (data.containsKey("lyric")) {
         prevMetadata.putString("android.media.metadata.LYRICS", data.getString("lyric"));
+        prevMetadata.putString("ucar.media.metadata.LYRICS_WHOLE", data.getString("lyric"));
+        session.setMetadata(prevMetadata.build());
+        updatePlaybackState(manager.getPlayback());
+        return;
       }
-      session.setMetadata(prevMetadata.build());
+      // 完全复刻旧版 r()：A2DP 判断 → 新建 Builder → 只写标准字段 → 整条替换
+      android.media.AudioManager am = (android.media.AudioManager) service.getSystemService(android.content.Context.AUDIO_SERVICE);
+      if (am != null && am.isBluetoothA2dpOn()) {
+        android.media.AudioDeviceInfo[] devs = null;
+        if (android.os.Build.VERSION.SDK_INT >= 23) {
+          devs = am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS);
+        }
+        if (devs != null) {
+          for (android.media.AudioDeviceInfo d : devs) {
+            if (d.getType() == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP) {
+              MediaMetadataCompat.Builder builder = new MediaMetadataCompat.Builder();
+              if (data.containsKey("title")) {
+                builder.putString(METADATA_KEY_TITLE, data.getString("title"));
+              }
+              if (data.containsKey("artist")) {
+                builder.putString(METADATA_KEY_ARTIST, data.getString("artist"));
+              }
+              if (data.containsKey("album")) {
+                builder.putString(METADATA_KEY_ALBUM, data.getString("album"));
+              }
+              if (prevArtwork != null) {
+                builder.putString(METADATA_KEY_ART_URI, prevArtwork.toString());
+              }
+              if (prevArtResource != null) {
+                builder.putBitmap(METADATA_KEY_ART, prevArtResource);
+              }
+              session.setMetadata(builder.build());
+              break;
+            }
+          }
+        }
+      }
       updatePlaybackState(manager.getPlayback());
     }`,
   ],
