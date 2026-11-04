@@ -73,7 +73,7 @@ const patchs = [
                 builder.putString(METADATA_KEY_ART_URI, prevArtwork.toString());
               }
               if (prevArtResource != null) {
-                builder.putBitmap(METADATA_KEY_ART, prevArtResource);
+                builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, prevArtResource);
               }
               session.setMetadata(builder.build());
               break;
