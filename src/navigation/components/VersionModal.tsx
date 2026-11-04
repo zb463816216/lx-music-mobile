@@ -159,7 +159,9 @@ const VersionModal = ({ componentId }: { componentId: string }) => {
     hideModal(componentId)
   }
   const handleIgnore = () => {
-    setIgnoreVersion(ignoreVersion != versionInfo.newVersion!.version ? versionInfo.newVersion!.version : null)
+    const ver = versionInfo.newVersion?.version
+    if (!ver) return
+    setIgnoreVersion(ignoreVersion != ver ? ver : null)
     // handleCancel()
   }
 
@@ -170,6 +172,7 @@ const VersionModal = ({ componentId }: { componentId: string }) => {
       void updateApp()
     } else if (versionInfo.status == 'idle' || versionInfo.status == 'error') {
       downloadUpdate()
+      handleCancel()
     }
   }
 

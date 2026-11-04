@@ -66,3 +66,6 @@ buck-out/
 
 # testing
 /coverage
+
+*.jks
+artifacts/

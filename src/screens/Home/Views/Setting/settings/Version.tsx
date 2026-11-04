@@ -9,7 +9,7 @@ import { sizeFormate } from '@/utils'
 import { useI18n } from '@/lang'
 import { useVersionDownloadProgressUpdated, useVersionInfo } from '@/store/version/hook'
 import Text from '@/components/common/Text'
-import { showModal } from '@/core/version'
+import { showModal, checkUpdate } from '@/core/version'
 
 const currentVer = process.versions.app
 export default memo(() => {
@@ -20,8 +20,9 @@ export default memo(() => {
   const [tip, setTip] = useState('')
   const progress = useVersionDownloadProgressUpdated()
   const handleOpenVersionModal = () => {
-    // setVersionInfo({ showModal: true })
+    // 先打开弹窗（会先显示「检查更新中」），同时触发检查，拿到数据后弹窗自动填充
     showModal()
+    void checkUpdate()
   }
 
   useEffect(() => {
@@ -55,6 +56,16 @@ export default memo(() => {
           break
         // case 'idle':
         //   break
+        case 'idle':
+          // 未检查过：显示「检查更新」；已拿到更新信息：显示「发现新版本」
+          if (versionInfo.newVersion) {
+            setTitle(t('version_title_new'))
+            setTip('')
+          } else {
+            setTitle(t('setting_check_update'))
+            setTip('')
+          }
+          break
         default:
           setTitle(t('version_title_new'))
           setTip('')

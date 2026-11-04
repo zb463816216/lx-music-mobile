@@ -1,45 +1,113 @@
-name: Build
+name: Build & Release (clean-vivo)
 
+# 触发：推送到 clean-vivo（上游同步合并后会自动触发）、或手动点击 Run workflow
 on:
   push:
     branches:
-      - master
+      - clean-vivo
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
 
 jobs:
   Android:
-    name: Android
+    name: Build APK
     runs-on: ubuntu-latest
+    # 防自触发死循环：GitHub Actions 不认 [skip ci] 提交信息，故靠 if 守卫——
+    # 仅手动触发、或提交信息不含 "skip ci"（即上游同步的提交）时才构建，自身 push 的 skip ci 提交会被跳过
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, 'skip ci')
+    outputs:
+      package_version: ${{ steps.vars.outputs.package_version }}
+      new_code: ${{ steps.vars.outputs.new_code }}
+      build_tag: ${{ steps.vars.outputs.build_tag }}
     steps:
       - name: Check out git repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Setup Env
+      - name: Setup Env (Node / Java / npm ci)
         uses: ./.github/actions/setup
+
+      # 关键：把私有 fork 的车机歌词(uCar/ICCOA)补丁打进 node_modules
+      - name: Patch react-native-track-player (uCar metadata)
+        run: node dependencies-patch.js
+
+      # 缓存 Android SDK/NDK（含 NDK 26 约 1GB，命中后跳过下载，极大加速）
+      - name: Cache Android SDK & NDK
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/android-sdk
+          key: android-sdk-${{ runner.os }}-ndk26.1.10909125
+
+      # 手动安装 Android SDK/NDK（缓存命中则直接复用，不再下载）
+      # setup-android@v3 内部写死 `sdkmanager tools`，而 runner 的 cmdline-tools(16.0) 已移除该包，
+      # 必报 "Failed to find package 'tools'" 并退出 1。改用手动安装官方 cmdline-tools，干净可控。
+      - name: Setup Android SDK & NDK
+        run: |
+          ANDROID_SDK_ROOT=/home/runner/android-sdk
+          if [ ! -f "$ANDROID_SDK_ROOT/platforms/android-36/android.jar" ]; then
+            mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+            curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/cmdtools.zip
+            unzip -q /tmp/cmdtools.zip -d "$ANDROID_SDK_ROOT/cmdline-tools"
+            mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+            export PATH="$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin"
+            yes | sdkmanager --licenses >/dev/null 2>&1 || true
+            sdkmanager "platforms;android-36" "build-tools;35.0.0" "ndk;26.1.10909125" "platform-tools"
+          else
+            echo "Android SDK cache hit, skip download"
+          fi
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
+
+      # 缓存 Gradle 依赖（~/.gradle），命中后跳过 Maven 依赖下载，加速构建
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'android/build.gradle', 'android/app/build.gradle') }}
+
+      - name: Compute version & bump versionCode
+        id: vars
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          # versionCode 用 Unix 秒级时间戳：严格单调递增、与本次构建天然一一对应，
+          # 避免「读旧值 +1」在多次并发/时序错位时，出现 apkUrl 与 versionCode 不一致、
+          # 进而导致「当前版本高于下载版本，无法安装」的问题。
+          NEW_CODE=$(date +%s)
+          BUILD_TAG="v${PACKAGE_VERSION}-${GITHUB_SHA::7}"
+          node -e "const fs=require('fs');const p='package.json';const j=JSON.parse(fs.readFileSync(p));j.versionCode=${NEW_CODE};fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')"
+          echo "package_version=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
+          echo "new_code=$NEW_CODE" >> $GITHUB_OUTPUT
+          echo "build_tag=$BUILD_TAG" >> $GITHUB_OUTPUT
+          echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> $GITHUB_ENV
 
       - name: Build Packages
         env:
           DISABLE_SVG: 1
+          STORE_FILE_BASE64: ${{ secrets.KEYSTORE_STORE_FILE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.KEYSTORE_KEY_ALIAS }}
+          STORE_PWD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PWD: ${{ secrets.KEYSTORE_KEY_PASSWORD }}
         shell: bash
         run: |
           cd android
-          echo ${{ secrets.KEYSTORE_STORE_FILE_BASE64 }} | base64 --decode > app/${{ secrets.KEYSTORE_STORE_FILE }}
-          ./gradlew assembleRelease -PMYAPP_UPLOAD_STORE_FILE='${{ secrets.KEYSTORE_STORE_FILE }}' -PMYAPP_UPLOAD_KEY_ALIAS='${{ secrets.KEYSTORE_KEY_ALIAS }}' -PMYAPP_UPLOAD_STORE_PASSWORD='${{ secrets.KEYSTORE_PASSWORD }}' -PMYAPP_UPLOAD_KEY_PASSWORD='${{ secrets.KEYSTORE_KEY_PASSWORD }}'
-          rm -f app/${{ secrets.KEYSTORE_STORE_FILE }}
-
-      # Push tag to GitHub if package.json version's tag is not tagged
-      - name: Get package version
-        run: |
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-          echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> $GITHUB_ENV
-
-      - name: Create git tag
-        uses: pkgdeps/git-tag-action@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          github_repo: ${{ github.repository }}
-          version: ${{ env.PACKAGE_VERSION }}
-          git_commit_sha: ${{ github.sha }}
-          git_tag_prefix: "v"
+          # 预检：缺失任何密钥直接报错并指明缺哪个，避免晦涩失败
+          : "${STORE_FILE_BASE64:?❌ 缺少密钥 KEYSTORE_STORE_FILE_BASE64（用 Git Bash 跑 base64 -w0 my-release-key.jks 生成）}"
+          : "${KEY_ALIAS:?❌ 缺少密钥 KEYSTORE_KEY_ALIAS（应填 myKeyAlias）}"
+          : "${STORE_PWD:?❌ 缺少密钥 KEYSTORE_PASSWORD（keystore 密码）}"
+          : "${KEY_PWD:?❌ 缺少密钥 KEYSTORE_KEY_PASSWORD（密钥密码）}"
+          # 注意：app/build.gradle 里 storeFile file(MYAPP_UPLOAD_STORE_FILE) 是相对 app 模块目录(android/app/)解析的，
+          # 传相对名会去 android/app/ 找而报 "Keystore file ... not found"。这里统一用绝对路径，彻底避免歧义。
+          KS_PATH="$PWD/my-release-key.jks"
+          echo "$STORE_FILE_BASE64" | base64 --decode > "$KS_PATH"
+          ./gradlew assembleRelease -PMYAPP_UPLOAD_STORE_FILE="$KS_PATH" -PMYAPP_UPLOAD_KEY_ALIAS="$KEY_ALIAS" -PMYAPP_UPLOAD_STORE_PASSWORD="$STORE_PWD" -PMYAPP_UPLOAD_KEY_PASSWORD="$KEY_PWD"
+          rm -f "$KS_PATH"
 
       - name: Generate file MD5
         run: |
@@ -51,108 +119,20 @@ jobs:
         env:
           PACKAGE_VERSION: ${{ env.PACKAGE_VERSION }}
 
-  # Android_SL:
-  #   name: Android_SL
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Check out git repository
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: statusbar_lyric
-
-  #     - name: Setup Env
-  #       uses: ./.github/actions/setup
-
-  #     - name: Build Packages
-  #       shell: bash
-  #       run: |
-  #         cd android
-  #         echo ${{ secrets.KEYSTORE_STORE_FILE_BASE64 }} | base64 --decode > app/${{ secrets.KEYSTORE_STORE_FILE }}
-  #         ./gradlew assembleRelease -PMYAPP_UPLOAD_STORE_FILE='${{ secrets.KEYSTORE_STORE_FILE }}' -PMYAPP_UPLOAD_KEY_ALIAS='${{ secrets.KEYSTORE_KEY_ALIAS }}' -PMYAPP_UPLOAD_STORE_PASSWORD='${{ secrets.KEYSTORE_PASSWORD }}' -PMYAPP_UPLOAD_KEY_PASSWORD='${{ secrets.KEYSTORE_KEY_PASSWORD }}'
-  #         rm -f app/${{ secrets.KEYSTORE_STORE_FILE }}
-
-  #     # Push tag to GitHub if package.json version's tag is not tagged
-  #     - name: Get package version
-  #       run: |
-  #         node -p -e '`PACKAGE_VERSION=${require("./package.json").version}`' >> $GITHUB_ENV
-  #         echo "COMMIT_SHA=$(git show -s --format=%H)" >> $GITHUB_ENV
-
-  #     - name: Create git tag
-  #       uses: pkgdeps/git-tag-action@v3
-  #       with:
-  #         github_token: ${{ secrets.GITHUB_TOKEN }}
-  #         github_repo: ${{ github.repository }}
-  #         version: ${{ env.PACKAGE_VERSION }}
-  #         git_commit_sha: ${{ env.COMMIT_SHA }}
-  #         git_tag_prefix: "v"
-
-  #     - name: Generate file MD5
-  #       run: |
-  #         echo "current commit sha: ${{ env.COMMIT_SHA }}"
-  #         cd android/app/build/outputs/apk/release
-  #         md5sum *.apk
-
-  #     - name: Upload Artifact
-  #       uses: ./.github/actions/upload-artifact
-  #       env:
-  #         PACKAGE_TYPE: 'Android_SL'
-  #         PACKAGE_VERSION: ${{ env.PACKAGE_VERSION }}
-
-  # Android_5:
-  #   name: Android_5
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Check out git repository
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: android_5
-
-  #     - name: Setup Env
-  #       uses: ./.github/actions/setup
-
-  #     - name: Build Packages
-  #       shell: bash
-  #       run: |
-  #         cd android
-  #         echo ${{ secrets.KEYSTORE_STORE_FILE_BASE64 }} | base64 --decode > app/${{ secrets.KEYSTORE_STORE_FILE }}
-  #         ./gradlew assembleRelease -PMYAPP_UPLOAD_STORE_FILE='${{ secrets.KEYSTORE_STORE_FILE }}' -PMYAPP_UPLOAD_KEY_ALIAS='${{ secrets.KEYSTORE_KEY_ALIAS }}' -PMYAPP_UPLOAD_STORE_PASSWORD='${{ secrets.KEYSTORE_PASSWORD }}' -PMYAPP_UPLOAD_KEY_PASSWORD='${{ secrets.KEYSTORE_KEY_PASSWORD }}'
-  #         rm -f app/${{ secrets.KEYSTORE_STORE_FILE }}
-
-  #     # Push tag to GitHub if package.json version's tag is not tagged
-  #     - name: Get package version
-  #       run: |
-  #         node -p -e '`PACKAGE_VERSION=${require("./package.json").version}`' >> $GITHUB_ENV
-  #         echo "COMMIT_SHA=$(git show -s --format=%H)" >> $GITHUB_ENV
-
-  #     - name: Create git tag
-  #       uses: pkgdeps/git-tag-action@v3
-  #       with:
-  #         github_token: ${{ secrets.GITHUB_TOKEN }}
-  #         github_repo: ${{ github.repository }}
-  #         version: ${{ env.PACKAGE_VERSION }}
-  #         git_commit_sha: ${{ env.COMMIT_SHA }}
-  #         git_tag_prefix: "v"
-
-  #     - name: Generate file MD5
-  #       run: |
-  #         echo "current commit sha: ${{ env.COMMIT_SHA }}"
-  #         cd android/app/build/outputs/apk/release
-  #         md5sum *.apk
-
-  #     - name: Upload Artifact
-  #       uses: ./.github/actions/upload-artifact
-  #       env:
-  #         PACKAGE_TYPE: 'Android_5'
-  #         PACKAGE_VERSION: ${{ env.PACKAGE_VERSION }}
-
   Release:
-    name: Release
+    name: Release & OTA
     runs-on: ubuntu-latest
-    # needs: [Android, Android_SL]
     needs: [Android]
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, 'skip ci')
+    env:
+      PACKAGE_VERSION: ${{ needs.Android.outputs.package_version }}
+      BUILD_TAG: ${{ needs.Android.outputs.build_tag }}
+      NEW_CODE: ${{ needs.Android.outputs.new_code }}
     steps:
       - name: Check out git repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Download Artifacts
         uses: actions/download-artifact@v4
@@ -166,12 +146,6 @@ jobs:
           cd artifacts
           md5sum *.apk >> ../publish/changeLog.md
           echo -e '```\n' >> ../publish/changeLog.md
-          echo -e '\n[软件安装包说明](https://lyswhut.github.io/lx-music-doc/download#%E8%BD%AF%E4%BB%B6%E5%AE%89%E8%A3%85%E5%8C%85%E8%AF%B4%E6%98%8E)\n' >> ../publish/changeLog.md
-
-      - name: Get package version
-        run: |
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-          echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> $GITHUB_ENV
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -179,15 +153,38 @@ jobs:
           body_path: ./publish/changeLog.md
           prerelease: false
           draft: false
-          tag_name: v${{ env.PACKAGE_VERSION }}
+          tag_name: ${{ env.BUILD_TAG }}
           files: |
             artifacts/lx-music-mobile-v${{ env.PACKAGE_VERSION }}-arm64-v8a.apk
             artifacts/lx-music-mobile-v${{ env.PACKAGE_VERSION }}-armeabi-v7a.apk
             artifacts/lx-music-mobile-v${{ env.PACKAGE_VERSION }}-x86_64.apk
             artifacts/lx-music-mobile-v${{ env.PACKAGE_VERSION }}-x86.apk
             artifacts/lx-music-mobile-v${{ env.PACKAGE_VERSION }}-universal.apk
-
-          # artifacts/lx-music-mobile-v${{ env.PACKAGE_VERSION }}-sl-arm64-v8a.apk
-          # artifacts/lx-music-mobile-v${{ env.PACKAGE_VERSION }}-android_5-universal.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 自动回写 OTA：version 用「主版本.构建号」保证恒大于本机；apkUrl 指向本次 Release 的 universal 包
+      - name: Update OTA metadata
+        run: |
+          OTA_VER="${{ env.PACKAGE_VERSION }}.${{ env.NEW_CODE }}"
+          OTA_URL="https://github.com/zb463816216/lx-music-mobile/releases/download/${{ env.BUILD_TAG }}/lx-music-mobile-v${{ env.PACKAGE_VERSION }}-universal.apk"
+          node -e "const fs=require('fs');const p='ota/update.json';const j=JSON.parse(fs.readFileSync(p));j.version=process.env.OTA_VER;j.versionCode=Number(process.env.OTA_CODE);j.apkUrl=process.env.OTA_URL;fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')"
+        env:
+          OTA_VER: ${{ env.PACKAGE_VERSION }}.${{ env.NEW_CODE }}
+          OTA_CODE: ${{ env.NEW_CODE }}
+          OTA_URL: https://github.com/zb463816216/lx-music-mobile/releases/download/${{ env.BUILD_TAG }}/lx-music-mobile-v${{ env.PACKAGE_VERSION }}-universal.apk
+
+      # 把本构建使用的 versionCode 写回 package.json 并提交，否则下一轮仍从旧值 +1，导致 APK versionCode 不累加、
+      # 用户已装旧版时系统拒绝覆盖安装（OTA 提示有更新却装不上）
+      - name: Persist versionCode
+        run: |
+          node -e "const fs=require('fs');const p='package.json';const j=JSON.parse(fs.readFileSync(p));j.versionCode=${{ needs.Android.outputs.new_code }};fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')"
+
+      - name: Commit OTA & versionCode [skip ci]
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # 只提交 OTA 元数据与 versionCode，绝不能 git add -A（否则会把 artifacts/ 里的 APK 一起提交进仓库）
+          git add package.json ota/update.json
+          git commit -m "chore: bump versionCode & update OTA [skip ci]" || echo "nothing to commit"
+          git push

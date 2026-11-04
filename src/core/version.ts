@@ -1,11 +1,12 @@
 import { compareVer } from '@/utils'
-import { downloadNewVersion, getVersionInfo } from '@/utils/version'
+import { getOtaInfo, downloadOta } from '@/utils/ota'
 import versionActions from '@/store/version/action'
 import versionState, { type InitState } from '@/store/version/state'
-import { getIgnoreVersion, getIgnoreVersionFailTipTime, saveIgnoreVersion, saveIgnoreVersionFailTipTime } from '@/utils/data'
+import { getIgnoreVersion, saveIgnoreVersion } from '@/utils/data'
 import { showVersionModal } from '@/navigation'
 import { Navigation } from 'react-native-navigation'
 import { toast } from '@/utils/tools'
+import { version as currentVersion, versionCode as currentVersionCode } from '../../package.json'
 
 export const showModal = () => {
   if (versionState.showModal) return
@@ -23,64 +24,44 @@ export const checkUpdate = async() => {
   versionActions.setVersionInfo({ status: 'checking' })
   let versionInfo: InitState['versionInfo'] = { ...versionState.versionInfo }
   try {
-    const { version, desc, history } = await getVersionInfo()
+    // 本 fork 使用自定义 OTA（ota/update.json），不再请求上游 LX 的 version.json
+    const info = await getOtaInfo()
     versionInfo.newVersion = {
-      version,
-      desc,
-      history,
-    }
-  } catch (err) {
-    versionInfo.newVersion = {
-      version: '0.0.0',
-      desc: '',
+      version: info.version,
+      desc: info.changelog ?? '',
       history: [],
+      apkUrl: info.apkUrl,
     }
-  }
-  // const versionInfo = {
-  //   version: '1.9.0',
-  //   desc: '- 更新xxx\n- 修复xxx123的萨达修复xxx123的萨达修复xxx123的萨达修复xxx123的萨达修复xxx123的萨达',
-  //   history: [{ version: '1.8.0', desc: '- 更新xxx22\n- 修复xxx22' }, { version: '1.7.0', desc: '- 更新xxx22\n- 修复xxx22' }],
-  // }
-  if (versionInfo.newVersion.version == '0.0.0') {
-    versionInfo.isUnknown = true
-    versionInfo.status = 'error'
-  } else {
-    versionInfo.status = 'idle'
     versionInfo.isUnknown = false
-    if (compareVer(versionInfo.version, versionInfo.newVersion.version) != -1) {
-      versionInfo.isLatest = true
-    }
+    versionInfo.status = 'idle'
+    // 用 versionCode 判断是否最新（versionName 固定不变，用字符串会永远判定有新版）
+    versionInfo.isLatest = info.versionCode != null
+      ? (currentVersionCode ?? 0) >= info.versionCode
+      : compareVer(currentVersion, info.version) != -1
+  } catch (err) {
+    versionInfo.newVersion = null
+    versionInfo.isUnknown = true
+    versionInfo.isLatest = false
+    versionInfo.status = 'error'
   }
 
   versionActions.setVersionInfo(versionInfo)
 
-  if (!versionInfo.isLatest) {
-    if (versionInfo.isUnknown) {
-      const time = await getIgnoreVersionFailTipTime()
-      if (Date.now() - time < 7 * 86400000) return
-      saveIgnoreVersionFailTipTime(Date.now())
-      toast(global.i18n.t('version_tip_unknown'))
-    } else if (versionInfo.newVersion.version != await getIgnoreVersion()) {
-      showModal()
-    }
+  if (versionInfo.isLatest) {
+    toast('已经是最新版本')
+  } else if (!versionInfo.isUnknown && versionInfo.newVersion?.version != await getIgnoreVersion()) {
+    showModal()
   }
-  // console.log(compareVer(process.versions.app, versionInfo.version))
-  // console.log(process.versions.app, versionInfo.version)
 }
 
 export const downloadUpdate = () => {
-  versionActions.setVersionInfo({ status: 'downloading' })
-  versionActions.setProgress({ total: 0, current: 0 })
-
-  downloadNewVersion(versionState.versionInfo.newVersion!.version, (total: number, current: number) => {
-    // console.log(total, current)
-    versionActions.setProgress({ total, current })
-  }).then(() => {
-    versionActions.setVersionInfo({ status: 'downloaded' })
-  }).catch(() => {
+  const apkUrl = versionState.versionInfo.newVersion?.apkUrl
+  if (!apkUrl) {
     versionActions.setVersionInfo({ status: 'error' })
-    // console.log(err)
-  })
+    return
+  }
+  // 走自定义 OTA 下载（自带进度提示与失败兜底），不再用上游 downloadNewVersion
+  void downloadOta(apkUrl)
 }
 
 
