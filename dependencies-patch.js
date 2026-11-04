@@ -26,7 +26,13 @@ const patchs = [
         metadata.putString("ucar.media.metadata.UCAR_TITLE", track.title);
         metadata.putString("ucar.media.metadata.UCAR_ARTIST", track.artist);
         if (track.lyric != null) {
-          metadata.putString("ucar.media.metadata.LYRICS_WHOLE", track.lyric);
+          // uCar 协议 Page18：Bundle 上限 1M，歌词超 0.8M 必须截断前段（按 UTF-8 字节）
+          String lrc = track.lyric;
+          try {
+            byte[] bytes = lrc.getBytes("UTF-8");
+            if (bytes.length > 800 * 1024) lrc = new String(bytes, 0, 800 * 1024, "UTF-8");
+          } catch (java.io.UnsupportedEncodingException ignored) { }
+          metadata.putString("ucar.media.metadata.LYRICS_WHOLE", lrc);
           metadata.putLong("ucar.media.metadata.LYRICS_STATUS", 0L);
         }
         prevMetadata = metadata;`,
@@ -43,8 +49,16 @@ const patchs = [
       if (prevMetadata == null) return;
       // lyric 字段：写入 prevMetadata（LYRICS_WHOLE 更新，不参与逐句替换）
       if (data.containsKey("lyric")) {
-        prevMetadata.putString("android.media.metadata.LYRICS", data.getString("lyric"));
-        prevMetadata.putString("ucar.media.metadata.LYRICS_WHOLE", data.getString("lyric"));
+        // 同样按 uCar 协议做 0.8M UTF-8 截断
+        String lrc = data.getString("lyric");
+        if (lrc != null) {
+          try {
+            byte[] bytes = lrc.getBytes("UTF-8");
+            if (bytes.length > 800 * 1024) lrc = new String(bytes, 0, 800 * 1024, "UTF-8");
+          } catch (java.io.UnsupportedEncodingException ignored) { }
+          prevMetadata.putString("android.media.metadata.LYRICS", lrc);
+          prevMetadata.putString("ucar.media.metadata.LYRICS_WHOLE", lrc);
+        }
         session.setMetadata(prevMetadata.build());
         updatePlaybackState(manager.getPlayback());
         return;
@@ -83,6 +97,18 @@ const patchs = [
       }
       updatePlaybackState(manager.getPlayback());
     }`,
+  ],
+  // ③ 封面异步加载：原实现用全新 builder 覆盖整个 metadata，
+  // 会把 ①② 写入的 UCAR_TITLE / LYRICS_WHOLE 全部冲掉（车机歌词随机消失）。
+  // 改为基于 prevMetadata 增量更新。
+  [
+    'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
+    '        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();\n\n        metadata.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmap);\n        builder.setLargeIcon(bitmap);\n\n        session.setMetadata(metadata.build());',
+    `        if (prevMetadata == null) return;
+        prevMetadata.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmap);
+        builder.setLargeIcon(bitmap);
+
+        session.setMetadata(prevMetadata.build());`,
   ],
 ]
 
