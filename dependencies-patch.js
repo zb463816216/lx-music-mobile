@@ -19,18 +19,9 @@ const patchs = [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
     '        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();\n        prevMetadata = metadata;',
     `        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();
-        // 【测试版 · 可回退】ICCOA 1.0.16 Page 18 字段固定值，用于定位「车机读哪个 key、显示在哪个位置」。
-        // 标准 TITLE/ARTIST 仍是真实歌名/歌手，可对比车机是否优先使用 UCAR_TITLE/UCAR_ARTIST。
-        // 实测完成后 git revert 本提交即恢复真实数据。
-        metadata.putString("ucar.media.metadata.UCAR_TITLE", "TIT:uCar标题");
-        metadata.putString("ucar.media.metadata.UCAR_ARTIST", "ART:uCar歌手");
-        metadata.putString("ucar.media.metadata.LYRICS_WHOLE", "WHOLE:整首歌词");
-        metadata.putString("ucar.media.metadata.LYRICS_LINE", "LINE:单句歌词");
-        metadata.putLong("ucar.media.metadata.LYRICS_STATUS", 0L);
-        metadata.putString("ucar.media.metadata.FAVORITE_STATE", "1");
-        metadata.putString("ucar.media.metadata.COLLECT_STATE", "1");
-        metadata.putString("ucar.media.metadata.VIP", "1");
-        metadata.putLong("ucar.media.metadata.PLAY_MODE", 2L);
+        if (track.lyric != null) {
+          metadata.putString("ucar.media.metadata.LYRICS_WHOLE", track.lyric);
+        }
         android.os.Bundle allowed = new android.os.Bundle();
         allowed.putBoolean("music.media.extras.LYRIC_IS_ALLOWED", true);
         session.setExtras(allowed);
