@@ -1,7 +1,7 @@
 {
   "name": "lx-music-mobile",
   "version": "1.9.2-salt.3",
-  "versionCode": 1793851156,
+  "versionCode": 1793871461,
   "private": true,
   "scripts": {
     "dev": "react-native run-android --active-arch-only",
