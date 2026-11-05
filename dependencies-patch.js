@@ -13,6 +13,8 @@ const rootPath = path.join(__dirname, './')
 //   h()          → 上游 updateRemoteLyric() 已实现（逐句把歌词放进 title），不重复写
 //   w()          → refreshLyricWithEvent：歌词加载完成后补推 LYRICS_WHOLE（updateTitles 处理 lyric key 等价实现）
 //   t(Z)         → setExtras("music.media.extras.LYRIC_IS_ALLOWED", true)
+// 上游完整蓝牙歌词（android.media.metadata.LYRICS 标准字段）整条移除：vivo 全 APK 零写入，
+// 整首歌词只走 uCar LYRICS_WHOLE，逐句只走 LYRICS_LINE + extras.LYRIC。
 // vivo 未实现的 UCAR_TITLE / UCAR_ARTIST / LYRICS_STATUS、0.8M 截断一律不加。
 // 车机连接判据沿用旧版「是否 A2DP」细分：A2DP 已连 = 蓝牙通道，未连 = 车载通道。
 const patchs = [
@@ -54,11 +56,10 @@ const patchs = [
     }`,
     `    public void updateTitles(Bundle data) {
       if (prevMetadata == null) return;
-      // vivo w() refreshLyricWithEvent 等价：整首歌词加载完成后补推，通道无关（JS 侧受完整歌词开关控制）
+      // vivo w() refreshLyricWithEvent 等价：整首歌词加载完成后补推，只写 uCar LYRICS_WHOLE（上游标准 LYRICS 通道已移除）
       if (data.containsKey("lyric")) {
         String whole = data.getString("lyric");
         prevMetadata.putString("ucar.media.metadata.LYRICS_WHOLE", whole);
-        prevMetadata.putString("android.media.metadata.LYRICS", whole);
       }
       android.media.AudioManager am = (android.media.AudioManager) service.getSystemService(android.content.Context.AUDIO_SERVICE);
       boolean a2dp = am != null && am.isBluetoothA2dpOn();
@@ -72,7 +73,6 @@ const patchs = [
           extras.putString("music.media.extras.LYRIC", line);
           session.setExtras(extras);
           prevMetadata.putString("ucar.media.metadata.LYRICS_LINE", line);
-          prevMetadata.putString("android.media.metadata.LYRICS", line);
         }
         session.setMetadata(prevMetadata.build());
         updatePlaybackState(manager.getPlayback());
@@ -92,6 +92,16 @@ const patchs = [
       session.setMetadata(prevMetadata.build());
       updatePlaybackState(manager.getPlayback());
     }`,
+  ],
+  // ③ TrackMetadata.toMediaMetadata：移除上游完整蓝牙歌词（标准 LYRICS）写入，整首歌词只走 LYRICS_WHOLE
+  [
+    'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/models/TrackMetadata.java',
+    `        if (lyric != null) {
+            builder.putString("android.media.metadata.LYRICS", lyric);
+        }
+
+`,
+    '',
   ],
 ]
 
