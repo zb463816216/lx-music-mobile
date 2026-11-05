@@ -9,6 +9,7 @@ const rootPath = path.join(__dirname, './')
 //   b()/i(true)  → 切歌时整首歌词写 ucar.media.metadata.LYRICS_WHOLE
 //   s()          → 硬互斥：车载通道走 LYRICS_LINE 并 return；A2DP 通道沿用上游 TITLE=歌词行
 //   v()          → LYRICS_LINE + setExtras("music.media.extras.LYRIC", 当前行)
+//   b()          → DISPLAY_TITLE=歌名 / DISPLAY_SUBTITLE=歌手 / GENRE=歌名（vivo 用 GENRE 当第二显示槽）
 //   h()          → 上游 updateRemoteLyric() 已实现（逐句把歌词放进 title），不重复写
 //   t(Z)         → setExtras("music.media.extras.LYRIC_IS_ALLOWED", true)
 // vivo 未实现的 UCAR_TITLE / UCAR_ARTIST / LYRICS_STATUS、0.8M 截断一律不加。
@@ -19,6 +20,9 @@ const patchs = [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
     '        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();\n        prevMetadata = metadata;',
     `        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();
+        metadata.putString("android.media.metadata.DISPLAY_TITLE", track.title);
+        metadata.putString("android.media.metadata.DISPLAY_SUBTITLE", track.artist);
+        metadata.putString("android.media.metadata.GENRE", track.title);
         if (track.lyric != null) {
           metadata.putString("ucar.media.metadata.LYRICS_WHOLE", track.lyric);
         }
