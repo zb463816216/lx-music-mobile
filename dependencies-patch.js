@@ -11,6 +11,7 @@ const rootPath = path.join(__dirname, './')
 //   v()          → LYRICS_LINE + setExtras("music.media.extras.LYRIC", 当前行)
 //   b()          → DISPLAY_TITLE=歌名 / DISPLAY_SUBTITLE=歌手 / GENRE=歌名（vivo 用 GENRE 当第二显示槽）
 //   h()          → 上游 updateRemoteLyric() 已实现（逐句把歌词放进 title），不重复写
+//   w()          → refreshLyricWithEvent：歌词加载完成后补推 LYRICS_WHOLE（updateTitles 处理 lyric key 等价实现）
 //   t(Z)         → setExtras("music.media.extras.LYRIC_IS_ALLOWED", true)
 // vivo 未实现的 UCAR_TITLE / UCAR_ARTIST / LYRICS_STATUS、0.8M 截断一律不加。
 // 车机连接判据沿用旧版「是否 A2DP」细分：A2DP 已连 = 蓝牙通道，未连 = 车载通道。
@@ -53,6 +54,12 @@ const patchs = [
     }`,
     `    public void updateTitles(Bundle data) {
       if (prevMetadata == null) return;
+      // vivo w() refreshLyricWithEvent 等价：整首歌词加载完成后补推，通道无关（JS 侧受完整歌词开关控制）
+      if (data.containsKey("lyric")) {
+        String whole = data.getString("lyric");
+        prevMetadata.putString("ucar.media.metadata.LYRICS_WHOLE", whole);
+        prevMetadata.putString("android.media.metadata.LYRICS", whole);
+      }
       android.media.AudioManager am = (android.media.AudioManager) service.getSystemService(android.content.Context.AUDIO_SERVICE);
       boolean a2dp = am != null && am.isBluetoothA2dpOn();
 
@@ -81,9 +88,6 @@ const patchs = [
       }
       if (data.containsKey("album")) {
         prevMetadata.putString(METADATA_KEY_ALBUM, data.getString("album"));
-      }
-      if (data.containsKey("lyric")) {
-        prevMetadata.putString("android.media.metadata.LYRICS", data.getString("lyric"));
       }
       session.setMetadata(prevMetadata.build());
       updatePlaybackState(manager.getPlayback());
