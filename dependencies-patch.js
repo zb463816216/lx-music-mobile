@@ -25,6 +25,10 @@ const patchs = [
         // uCar (ICCOA) 媒体元数据（对齐旧版）：标题位纯歌名、歌手位歌手、歌词位整首LRC
         metadata.putString("ucar.media.metadata.UCAR_TITLE", track.title);
         metadata.putString("ucar.media.metadata.UCAR_ARTIST", track.artist);
+        // CarLife / 通用车机按 DISPLAY_TITLE=标题行、DISPLAY_SUBTITLE=副标题行（歌手位）显示；
+        // 不写则回退成 METADATA_KEY_ALBUM（专辑），与 vivo/uCar 走 UCAR_ARTIST 是两条独立路径。
+        metadata.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, track.title);
+        metadata.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, track.artist);
         if (track.lyric != null) {
           // uCar 协议 Page18：Bundle 上限 1M，歌词超 0.8M 必须截断前段（按 UTF-8 字节）
           String lrc = track.lyric;
@@ -83,6 +87,7 @@ const patchs = [
               if (data.containsKey("artist")) {
                 builder.putString(METADATA_KEY_ARTIST, data.getString("artist"));
                 builder.putString("ucar.media.metadata.UCAR_ARTIST", data.getString("artist"));
+                builder.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, data.getString("artist"));
               }
               if (data.containsKey("album")) {
                 builder.putString(METADATA_KEY_ALBUM, data.getString("album"));
