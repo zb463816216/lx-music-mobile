@@ -105,6 +105,20 @@
           android:resource="@xml/file_paths" />
       </provider>
 
+      <!-- vivo 投屏CastKit《普通应用接入标准》：声明 uCar 启动入口，供车机识别/启动应用。
+           用 activity-alias 指向现有 MainActivity，无需新增 Activity 类。
+           额外声明 DEFAULT，兼容车机以隐式 Intent（系统自动补 CATEGORY_DEFAULT）启动。 -->
+      <activity-alias
+        android:name=".UCarMainActivity"
+        android:targetActivity=".MainActivity"
+        android:exported="true">
+        <intent-filter>
+          <action android:name="com.ucar.intent.action.UCAR" />
+          <category android:name="com.ucar.intent.category.UCAR" />
+          <category android:name="android.intent.category.DEFAULT" />
+        </intent-filter>
+      </activity-alias>
+
       <!-- ICCOA 1.0.16 Page 3-4：车机通过 MediaBrowserService 绑定媒体应用 -->
       <service
         android:name=".CarMediaBrowserService"
