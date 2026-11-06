@@ -45,6 +45,14 @@ const patchs = [
           metadata.putString("ucar.media.metadata.LYRICS_WHOLE", track.lyric);
           metadata.putLong("ucar.media.metadata.LYRICS_STATUS", 0L);
         }
+        // ICCOA Page 18/19：车机靠这些字段「是否存在」判断显示 VIP / 收藏 / 点赞 / 播放模式按钮
+        // （vivo 官方 APK 同样只写字段、不调 addCustomAction）
+        metadata.putString("ucar.media.metadata.FAVORITE_STATE", "0");
+        metadata.putString("ucar.media.metadata.COLLECT_STATE", "0");
+        metadata.putString("ucar.media.metadata.VIP", "0");
+        metadata.putString("ucar.media.metadata.PLAY_FUNCTION_BUTTON_ENABLE", "true");
+        metadata.putLong("ucar.media.metadata.FAVORITE_NUMBER", 0L);
+        metadata.putLong("ucar.media.metadata.PLAY_MODE", 2L);
         android.os.Bundle allowed = new android.os.Bundle();
         allowed.putBoolean("music.media.extras.LYRIC_IS_ALLOWED", true);
         session.setExtras(allowed);
