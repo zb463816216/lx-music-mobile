@@ -29,11 +29,10 @@ const patchs = [
         // 不写则回退成 METADATA_KEY_ALBUM（专辑），与 vivo/uCar 走 UCAR_ARTIST 是两条独立路径。
         metadata.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, track.title);
         metadata.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, track.artist);
-        // 车机（vivo Jovi / CarLife）音乐卡片第二行读 METADATA_KEY_ALBUM：
-        // 专辑图来自 METADATA_KEY_ALBUM_ART（受「通知栏显示专辑封面」开关控制），
-        // 文字副标题与 ALBUM_ART 天然成对，故第二行取自 ALBUM 而非 ARTIST/DISPLAY_SUBTITLE。
-        // 原值=专辑名，导致第二行显示专辑；改为歌手即与 vivo 自带一致（歌名/歌手）。
-        metadata.putString(METADATA_KEY_ALBUM, track.artist);
+        // METADATA_KEY_ALBUM 保持专辑名（由 track.toMediaMetadata() 写入），仪表盘与投屏卡片的
+        // 「专辑位」都读它，绝不能改写为歌手，否则仪表盘专辑位会被污染。车机卡片第二行（歌手位）
+        // 走 DISPLAY_SUBTITLE(=歌手)，与 ARTIST / UCAR_ARTIST 一致；若个别车机固件仍回退到 ALBUM，
+        // 则需该车型单独适配，不在此全局改写。
         if (track.lyric != null) {
           // uCar 协议 Page18：Bundle 上限 1M，歌词超 0.8M 必须截断前段（按 UTF-8 字节）
           String lrc = track.lyric;
@@ -94,10 +93,8 @@ const patchs = [
                 builder.putString("ucar.media.metadata.UCAR_ARTIST", data.getString("artist"));
                 builder.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, data.getString("artist"));
               }
-              // 车机第二行读 METADATA_KEY_ALBUM，改为歌手（与 updateMetadata 一致）
-              if (data.containsKey("artist")) {
-                builder.putString(METADATA_KEY_ALBUM, data.getString("artist"));
-              }
+              // METADATA_KEY_ALBUM 保持专辑名（updateMetadata 已写入），不改写为歌手，
+              // 避免污染仪表盘专辑位；歌手位由 DISPLAY_SUBTITLE 承担。
               if (prevArtwork != null) {
                 builder.putString(METADATA_KEY_ART_URI, prevArtwork.toString());
               }
@@ -124,15 +121,6 @@ const patchs = [
         builder.setLargeIcon(bitmap);
 
         session.setMetadata(prevMetadata.build());`,
-  ],
-  // ④ 通知栏 MediaStyle：车机（vivo Jovi 走 CarLife 镜像）读的是通知栏而非 MediaMetadata。
-  // 车机镜像的是「折叠态」通知——只显示 ContentTitle(歌名) + SubText；原 SubText=album，
-  // 导致车机卡片第二行（歌名下方）显示成专辑。改为歌手后，第二行 = 歌手，与 vivo 自带一致。
-  // （ContentText 已是歌手，这里只改 SubText 即可，不影响手机通知栏展开的第三行语义。）
-  [
-    'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
-    'builder.setSubText(track.album);',
-    'builder.setSubText(track.artist);',
   ],
 ]
 
