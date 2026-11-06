@@ -19,9 +19,11 @@ const createFiles = [
     content: `package com.guichaguri.trackplayer.service;
 
 import android.os.Bundle;
-import android.support.v4.media.MediaBrowserCompat;
-import android.support.v4.media.MediaBrowserServiceCompat;
-import android.support.v4.media.session.MediaSessionCompat;
+import androidx.media.MediaBrowserCompat;
+import androidx.media.MediaBrowserServiceCompat;
+import androidx.media.MediaBrowserServiceCompat.BrowserRoot;
+import androidx.media.MediaBrowserServiceCompat.Result;
+import androidx.media.session.MediaSessionCompat;
 import java.util.ArrayList;
 import java.util.List;
 
