@@ -119,6 +119,15 @@ const patchs = [
 
         session.setMetadata(prevMetadata.build());`,
   ],
+  // ④ 通知栏 MediaStyle：车机（vivo Jovi 走 CarLife 镜像）读的是通知栏而非 MediaMetadata。
+  // 车机镜像的是「折叠态」通知——只显示 ContentTitle(歌名) + SubText；原 SubText=album，
+  // 导致车机卡片第二行（歌名下方）显示成专辑。改为歌手后，第二行 = 歌手，与 vivo 自带一致。
+  // （ContentText 已是歌手，这里只改 SubText 即可，不影响手机通知栏展开的第三行语义。）
+  [
+    'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
+    'builder.setSubText(track.album);',
+    'builder.setSubText(track.artist);',
+  ],
 ]
 
 ;(async() => {
