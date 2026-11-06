@@ -1,7 +1,7 @@
 {
-  "version": "1.9.2-salt.7.1793946684",
-  "versionCode": 1793946684,
-  "apkUrl": "https://github.com/zb463816216/lx-music-mobile/releases/download/v1.9.2-salt.7-81f1248/lx-music-mobile-v1.9.2-salt.7-universal.apk",
+  "version": "1.9.2-salt.8.1793948176",
+  "versionCode": 1793948176,
+  "apkUrl": "https://github.com/zb463816216/lx-music-mobile/releases/download/v1.9.2-salt.8-786ada1/lx-music-mobile-v1.9.2-salt.8-universal.apk",
   "changelog": "clean-vivo 干净基线（基于上游 v1.9.2）：包名 com.salt.music + OTA 自升级。首个版本由 CI 自动构建发布。",
   "force": false
 }
