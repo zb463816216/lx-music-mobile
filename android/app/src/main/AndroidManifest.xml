@@ -104,5 +104,14 @@
           android:name="android.support.FILE_PROVIDER_PATHS"
           android:resource="@xml/file_paths" />
       </provider>
+
+      <!-- ICCOA 1.0.16 Page 3-4：车机通过 MediaBrowserService 绑定媒体应用 -->
+      <service
+        android:name=".CarMediaBrowserService"
+        android:exported="true">
+        <intent-filter>
+          <action android:name="android.media.browse.MediaBrowserService" />
+        </intent-filter>
+      </service>
     </application>
 </manifest>
