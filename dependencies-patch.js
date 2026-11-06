@@ -5,37 +5,30 @@ const path = require('node:path')
 
 const rootPath = path.join(__dirname, './')
 
-// ============================ 车机显示：按实车槽位直接给值 ============================
-// 三轮实车探针 + vivo 官方 APK 反编译 + ICCOA 1.0.16 的结论：
+// ============================ 车机接入：按 ICCOA 1.0.16 补齐播放队列与页面数据 ============================
+// 根因（PDF Page 10 / 14 + vivo 官方 APK 反编译实证）：
+//   车机播放器页的「副标题」读的是**播放队列项/媒体项的 MediaDescription.setSubtitle()**，
+//   不是 MediaSession metadata 的槽位。vivo 的歌曲项与 QueueItem 都是
+//   setTitle(歌名) + setSubtitle(歌手)，且车机一绑定 onGetRoot 就立刻 session.setQueue()。
+//   本 fork 其实自带 Track.toQueueItem()（subtitle=artist、iconUri=artwork），
+//   但**全工程从未调用 session.setQueue()**，是死代码；车机拿不到队列，
+//   只能回落到 metadata 的 ALBUM（专辑），于是副标题一直显示专辑。
 //
-// 1) 这台车机对第三方 APP 走通用映射，元数据实际只读三个槽：
-//      标题槽   <- android.media.metadata.DISPLAY_TITLE
-//      副标题槽 <- android.media.metadata.ALBUM      （探针中 A:/DS:/G:/T/L/E 标记全部未显示）
-//      歌词槽   <- ucar.media.metadata.LYRICS_WHOLE  （带时间戳 LRC，车机自行滚动，已实车验证正常）
-//    协议 Page 17 标准字段表里并没有 METADATA_KEY_ALBUM，vivo 官方 APP 之所以能显示歌手，
-//    是因为它走系统级 MediaBrowserService 绑定（clientPackageName 白名单）。
-//    salt.5 补的绑定服务实测没有改变这台车机的槽位映射，故不再依赖「判通道」来决定写什么。
+// 本补丁按协议补上：
+//   ① 切歌时 session.setQueue()，队列项副标题=歌手（PDF Page 14）
+//   ⑧ PlaybackState 标记 activeQueueItemId，让车机把队列项与当前播放关联
+//   配合 CarMediaBrowserService 提供真实媒体树 / 搜索 / MediaItem 副标题（PDF Page 4-11）
 //
-// 2) 因此副标题槽直接写歌手名：ALBUM = track.artist。
-//    代价：仪表第二行也随之显示歌手而非专辑（该槽同样读 ALBUM，无法拆开）。
-//    ❗ updateTitles 绝不能再写 ALBUM，否则逐句事件会把歌手覆盖回专辑。
-//
-// 3) 两套歌词靠字段天然隔离，不需要任何通道判断：
-//      车机：LYRICS_WHOLE 整首 LRC（车机按进度滚动）
-//      蓝牙：TITLE = 当前歌词行、ARTIST = "歌名 - 歌手"（上游 JS 已实现，车机不读这两个槽）
-//    ❌ 不再用 isBluetoothA2dpOn()（车机互联本身就走 A2DP，实车恒 true）；
-//    ❌ 不再用 MediaBrowserService 绑定状态做分流（实测车机未按预期绑定）。
-//
-// 4) 字段其余部分照搬 vivo 官方 i(Z)：
-//    DISPLAY_TITLE=歌名 / DISPLAY_SUBTITLE=歌手 / GENRE=歌名 / LYRIC_IS_ALLOWED=true。
-//    ❌ 不写 UCAR_TITLE / UCAR_ARTIST（vivo 全 APK 无此字符串，实车无效）；
-//    ❌ 不写 LYRICS_LINE / LYRICS_STATUS / extras.LYRIC / 0.8M 截断 / 标准 LYRICS。
-//
-// 5) 封面异步加载修复：fork 原版 updateArtwork() 用全新 Builder 整条替换 metadata，
-//    会把切歌时写入的车机字段全部冲掉；改为基于 prevMetadata 增量更新（salt.5 实车已验证有效）。
-// =================================================================================
+// 元数据部分保持前几轮实车验证有效的结论：
+//   DISPLAY_TITLE=歌名 / DISPLAY_SUBTITLE=歌手 / GENRE=歌名 / ALBUM=歌手（通用槽位兜底），
+//   歌词只走 ucar.media.metadata.LYRICS_WHOLE（带时间戳 LRC，车机自行滚动），
+//   updateArtwork 基于 prevMetadata 增量更新（否则封面异步加载会冲掉全部字段）。
+//   updateTitles 绝不写 ALBUM，避免逐句事件把副标题覆盖回专辑。
+// ❌ 不再用 A2DP / MediaBrowserService 绑定状态做分流（两者实车都判不准）；
+// ❌ 不写 UCAR_TITLE/UCAR_ARTIST（vivo APK 无此字符串）/ LYRICS_LINE / 标准 LYRICS 等未验证字段。
+// ======================================================================================================
 const patchs = [
-  // ① updateMetadata：副标题槽(ALBUM)写歌手，其余照搬 vivo
+  // ① updateMetadata：字段 + 播放队列（关键：车机播放页副标题来自 QueueItem 的 subtitle）
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
     '        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();\n        prevMetadata = metadata;',
@@ -50,9 +43,18 @@ const patchs = [
         android.os.Bundle allowed = new android.os.Bundle();
         allowed.putBoolean("music.media.extras.LYRIC_IS_ALLOWED", true);
         session.setExtras(allowed);
+        // ICCOA Page 14：下发播放队列；QueueItem 的 subtitle 即歌手，车机播放页据此显示
+        android.support.v4.media.MediaDescriptionCompat.Builder qdesc = new android.support.v4.media.MediaDescriptionCompat.Builder();
+        qdesc.setMediaId("0");
+        qdesc.setTitle(track.title);
+        qdesc.setSubtitle(track.artist);
+        if (track.artwork != null) qdesc.setIconUri(track.artwork);
+        java.util.List<android.support.v4.media.session.MediaSessionCompat.QueueItem> carQueue = new java.util.ArrayList<>();
+        carQueue.add(new android.support.v4.media.session.MediaSessionCompat.QueueItem(qdesc.build(), 0));
+        session.setQueue(carQueue);
         prevMetadata = metadata;`,
   ],
-  // ② updateTitles：不再判通道；整首歌词走 LYRICS_WHOLE，逐句只写 TITLE/ARTIST，绝不碰 ALBUM
+  // ② updateTitles：整首歌词走 LYRICS_WHOLE；逐句只写 TITLE/ARTIST；绝不碰 ALBUM
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
     `    public void updateTitles(Bundle data) {
@@ -120,7 +122,7 @@ const patchs = [
     `import android.os.IBinder;
 import android.support.v4.media.session.MediaSessionCompat;`,
   ],
-  // ⑥ MusicService：暴露 session token 给 CarMediaBrowserService（仅用于协议绑定，不作分流判据）
+  // ⑥ MusicService：暴露 session token 给 CarMediaBrowserService
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/MusicService.java',
     `    MusicManager manager;
@@ -137,6 +139,17 @@ import android.support.v4.media.session.MediaSessionCompat;`,
     `        manager = new MusicManager(this);
         handler = new Handler();
         carSessionToken = manager.getMetadata().getSession().getSessionToken();`,
+  ],
+  // ⑧ updatePlaybackState：把当前队列项标为活动项，车机才能把队列与正在播放关联起来
+  [
+    'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
+    `        PlaybackStateCompat.Builder pb = new PlaybackStateCompat.Builder();
+        pb.setActions(actions);
+        pb.setState(playback.getState(), playback.getPosition(), playback.getRate());`,
+    `        PlaybackStateCompat.Builder pb = new PlaybackStateCompat.Builder();
+        pb.setActions(actions);
+        pb.setActiveQueueItemId(0);
+        pb.setState(playback.getState(), playback.getPosition(), playback.getRate());`,
   ],
 ]
 
