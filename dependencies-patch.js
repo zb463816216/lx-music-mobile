@@ -19,11 +19,15 @@ const createFiles = [
     content: `package com.guichaguri.trackplayer.service;
 
 import android.os.Bundle;
-import androidx.media.MediaBrowserCompat;
+// 命名空间说明（基于 CI 实测可见性）：track-player 模块开启了 useAndroidX，AGP 把
+// android.support.v4.media.* 重映射为 androidx 实现，故以下两个 support 命名空间的类可见；
+// 而 androidx.media.MediaBrowserCompat / androidx.media.session.MediaSessionCompat 直接写反而不可见。
+// MediaBrowserServiceCompat 则只能用 androidx 命名空间（support 版已被移除）。
+import android.support.v4.media.MediaBrowserCompat;
 import androidx.media.MediaBrowserServiceCompat;
 import androidx.media.MediaBrowserServiceCompat.BrowserRoot;
 import androidx.media.MediaBrowserServiceCompat.Result;
-import androidx.media.session.MediaSessionCompat;
+import android.support.v4.media.session.MediaSessionCompat;
 import java.util.ArrayList;
 import java.util.List;
 
