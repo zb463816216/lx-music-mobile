@@ -7,10 +7,75 @@ const rootPath = path.join(__dirname, './')
 
 // ===== 诊断开关 =====
 // true  = 诊断模式：把所有元数据字段写成各自的「字段名标记」，用于确定车机投屏卡片
-//         第二行到底读的是哪个字段。构建后到车上播放任意歌曲，看卡片第二行显示什么字符串，
-//         回报给我即可（例如显示 "M_ALBUM" 说明读 METADATA_KEY_ALBUM；"N_SubText" 说明镜像通知栏 SubText）。
-// false = 正常模式：走 uCar/CarLife 语义正确方案（歌手位 = artist，绝不污染专辑位）。
-const DIAGNOSTIC = true
+//         第二行到底读的是哪个字段。
+// false = 正常模式：走 uCar/CarLife 语义正确方案（歌手位 = artist，绝不污染专辑位），
+//         并注册 MediaBrowserService 让车机以 uCar 媒体应用身份连接、启用 UCAR_* 私有字段。
+const DIAGNOSTIC = false
+
+// ===== 新增文件（在依赖补丁执行后写入，Gradle 会自动编译 src/main/java 下所有 .java）=====
+const createFiles = [
+  {
+    path: 'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/UCarMediaBrowserService.java',
+    content: `package com.guichaguri.trackplayer.service;
+
+import android.os.Bundle;
+import android.support.v4.media.MediaBrowserCompat;
+import android.support.v4.media.MediaBrowserServiceCompat;
+import android.support.v4.media.session.MediaSessionCompat;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * uCar / ICCOA 车机投屏适配：声明 MediaBrowserService，使车机以 uCar 媒体应用身份连接，
+ * 从而启用 UCAR_* 私有元数据字段（UCAR_ARTIST 优先于 ARTIST / ALBUM，详见 ICCOA 标准 PDF 1.0.16）。
+ * 本服务不驱动播放，仅共享 TrackPlayer 的 MediaSession token，让车机读取其元数据。
+ */
+public class UCarMediaBrowserService extends MediaBrowserServiceCompat {
+
+    private static MediaSessionCompat.Token sSessionToken = null;
+    private boolean mTokenSet = false;
+
+    /** 由 MetadataManager 在创建 MediaSession 后调用，把播放 session 的 token 共享给本服务 */
+    public static void setToken(MediaSessionCompat.Token token) {
+        sSessionToken = token;
+    }
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        applyToken();
+    }
+
+    private void applyToken() {
+        if (!mTokenSet && sSessionToken != null) {
+            setSessionToken(sSessionToken);
+            mTokenSet = true;
+        }
+    }
+
+    @Override
+    public BrowserRoot onGetRoot(String clientPackageName, int clientUid, Bundle rootHints) {
+        // 车机以 uCar 身份连接时，在 onCreate 之后、读取元数据之前补设置 token
+        applyToken();
+        if (!mTokenSet) {
+            // 极少见：车机在 app 尚未创建 MediaSession 时连接，拒绝连接，不影响播放功能
+            return null;
+        }
+        // 返回根节点，携带标准 extras；uCar 字段由 MediaSession 元数据承载，与浏览树无关
+        Bundle extras = new Bundle();
+        extras.putBoolean("android.media.browse.CONTENT_STYLE_SUPPORTED", true);
+        return new BrowserRoot("ucar_media_root", extras);
+    }
+
+    @Override
+    public void onLoadChildren(String parentId, Result<List<MediaBrowserCompat.MediaItem>> result) {
+        // 不提供浏览树，仅用于让车机识别为媒体应用并读取 MediaSession 元数据
+        result.sendResult(new ArrayList<MediaBrowserCompat.MediaItem>());
+    }
+}
+`,
+  },
+]
 
 const patchs = [
   // ───────────────────────────────────────────────────────────────
@@ -84,7 +149,26 @@ const patchs = [
 `,
   ],
   // ───────────────────────────────────────────────────────────────
-  // 1) updateMetadata（切歌）：写元数据。诊断模式喷射全部字段标记；
+  // 1) import：在 MetadataManager.java 顶部引入 UCarMediaBrowserService（同工程 service 包）
+  // ───────────────────────────────────────────────────────────────
+  [
+    'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
+    'import android.support.v4.media.session.MediaSessionCompat;\n',
+    'import android.support.v4.media.session.MediaSessionCompat;\nimport com.guichaguri.trackplayer.service.UCarMediaBrowserService;\n',
+  ],
+  // ───────────────────────────────────────────────────────────────
+  // 2) 构造：MediaSession 创建后把 token 共享给 UCarMediaBrowserService（车机 uCar 连接用）
+  // ───────────────────────────────────────────────────────────────
+  [
+    'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
+    '        session.setFlags(MediaSessionCompat.FLAG_HANDLES_QUEUE_COMMANDS);\n',
+    `        session.setFlags(MediaSessionCompat.FLAG_HANDLES_QUEUE_COMMANDS);
+        // uCar: 把播放 session 的 token 共享给 UCarMediaBrowserService，使车机以 uCar 媒体应用身份连接
+        UCarMediaBrowserService.setToken(session.getSessionToken());
+`,
+  ],
+  // ───────────────────────────────────────────────────────────────
+  // 3) updateMetadata（切歌）：写元数据。诊断模式喷射全部字段标记；
   //    正常模式走 uCar/CarLife 语义正确方案（歌手位=artist，专辑位保持专辑名）。
   // ───────────────────────────────────────────────────────────────
   [
@@ -118,7 +202,7 @@ const patchs = [
         }`,
   ],
   // ───────────────────────────────────────────────────────────────
-  // 2) 通知栏 MediaStyle 文本（第 273–275 行）：诊断模式喷射标记，
+  // 4) 通知栏 MediaStyle 文本（第 273–275 行）：诊断模式喷射标记，
   //    用于判断车机卡片第二行是否「镜像通知栏 SubText」。
   // ───────────────────────────────────────────────────────────────
   [
@@ -135,7 +219,7 @@ const patchs = [
         }`,
   ],
   // ───────────────────────────────────────────────────────────────
-  // 3) updateTitles（逐句 / 设置项刷新）：诊断模式不覆盖喷射标记，
+  // 5) updateTitles（逐句 / 设置项刷新）：诊断模式不覆盖喷射标记，
   //    正常模式保留原本逻辑（基于 prevMetadata 增量，uCar 字段不会丢）。
   // ───────────────────────────────────────────────────────────────
   [
@@ -166,7 +250,7 @@ const patchs = [
     }`,
   ],
   // ───────────────────────────────────────────────────────────────
-  // 4) 封面异步加载：原实现用全新 builder 覆盖整个 metadata，会冲掉喷射字段。
+  // 6) 封面异步加载：原实现用全新 builder 覆盖整个 metadata，会冲掉喷射字段。
   //    改为基于 prevMetadata 增量更新（保留 uCar / 诊断标记）。
   // ───────────────────────────────────────────────────────────────
   [
@@ -178,6 +262,30 @@ const patchs = [
 
         session.setMetadata(prevMetadata.build());`,
   ],
+  // ───────────────────────────────────────────────────────────────
+  // 7) AndroidManifest.xml：声明 UCarMediaBrowserService（MediaBrowserService intent-filter），
+  //    使车机以 uCar 媒体应用身份连接，启用 UCAR_* 私有字段（歌手位 UCAR_ARTIST 优先）。
+  // ───────────────────────────────────────────────────────────────
+  [
+    'node_modules/react-native-track-player/android/src/main/AndroidManifest.xml',
+    `        <service android:name=".service.MusicService" android:enabled="true" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </service>`,
+    `        <service android:name=".service.MusicService" android:enabled="true" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </service>
+
+        <!-- uCar / ICCOA 车机适配：声明 MediaBrowserService，使车机以 uCar 媒体应用身份连接并启用 UCAR_* 私有字段 -->
+        <service android:name=".service.UCarMediaBrowserService" android:enabled="true" android:exported="true">
+            <intent-filter>
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>`,
+  ],
 ]
 
 ;(async() => {
@@ -188,7 +296,8 @@ const patchs = [
       const file = (await fs.promises.readFile(filePath)).toString()
       if (file.includes(fromStr)) {
         await fs.promises.writeFile(filePath, file.replace(fromStr, toStr))
-      } else if (file.includes('ucar.media.metadata.UCAR_TITLE') || file.includes('sprayMetadata')) {
+      } else if (file.includes('ucar.media.metadata.UCAR_TITLE') || file.includes('sprayMetadata')
+                 || file.includes('UCarMediaBrowserService') || file.includes('MediaBrowserService')) {
         console.log('  已打过补丁，跳过')
       } else {
         // 目标代码未匹配且未打过补丁：通常意味着上游 fork 该段被改动，补丁已失效
@@ -201,12 +310,43 @@ const patchs = [
     }
   }
 
+  // 创建新增文件（如 UCarMediaBrowserService.java）
+  for (const f of createFiles) {
+    console.log(`Creating ${f.path.replace(rootPath, '')}`)
+    try {
+      if (!fs.existsSync(f.path)) {
+        await fs.promises.mkdir(path.dirname(f.path), { recursive: true })
+        await fs.promises.writeFile(f.path, f.content)
+      } else {
+        console.log('  已存在，跳过创建')
+      }
+    } catch (err) {
+      console.error(`Create ${f.path.replace(rootPath, '')} failed: ${err.message}`)
+      failed = true
+    }
+  }
+
   // 规避补丁静默失效：打完后校验关键字段是否存在，缺失则直接报错退出
   const target = path.join(rootPath, 'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java')
+  const manifest = path.join(rootPath, 'node_modules/react-native-track-player/android/src/main/AndroidManifest.xml')
+  const uCar = path.join(rootPath, 'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/UCarMediaBrowserService.java')
   try {
     const patched = (await fs.promises.readFile(target)).toString()
     if (!patched.includes('sprayMetadata')) {
       console.error('\n✗ 校验失败：MetadataManager.java 未包含 sprayMetadata，补丁未生效！请检查 dependencies-patch.js 与上游 track-player fork。')
+      process.exit(1)
+    }
+    if (!patched.includes('UCarMediaBrowserService.setToken')) {
+      console.error('\n✗ 校验失败：MetadataManager.java 未注入 UCarMediaBrowserService.setToken，uCar 注册补丁未生效！')
+      process.exit(1)
+    }
+    const manifestTxt = (await fs.promises.readFile(manifest)).toString()
+    if (!manifestTxt.includes('android.media.browse.MediaBrowserService')) {
+      console.error('\n✗ 校验失败：AndroidManifest.xml 未声明 MediaBrowserService intent-filter，uCar 注册补丁未生效！')
+      process.exit(1)
+    }
+    if (!(await fs.promises.readFile(uCar)).toString().includes('class UCarMediaBrowserService')) {
+      console.error('\n✗ 校验失败：UCarMediaBrowserService.java 未创建或被覆盖！')
       process.exit(1)
     }
   } catch {
