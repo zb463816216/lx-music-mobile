@@ -5,35 +5,42 @@ const path = require('node:path')
 
 const rootPath = path.join(__dirname, './')
 
-// ============================ 车机歌词 + uCar 绑定通道 ============================
-// 依据：ICCOA《车机投屏-媒体应用接入标准 1.0.16》Page 3-5 / 17-18
-//   + vivo 官方 i 音乐 com.android.bbkmusic.manager.j 字节码实证（b/h/i/q/v/t 方法）
+// ============================ 车机显示：按实车槽位直接给值 ============================
+// 三轮实车探针 + vivo 官方 APK 反编译 + ICCOA 1.0.16 的结论：
 //
-// 1) 通道判据（v1.9.2-salt.4 的错误已修正）：
-//    uCar 车机互联通过 MediaBrowserService 绑定，判据 = 是否发生该绑定，
-//    由 CarMediaBrowserService.onGetRoot 置 MusicService.carUcarBound=true、onDestroy 复位。
-//    协议 Page 4 允许读 rootHints 的 UCAR 标识，但 vivo 车机反编译显示其只按
-//    clientPackageName 判来源、未携带该标识，故不把它当唯一判据。
-//    ❌ 不再用 isBluetoothA2dpOn()：车机互联本身就走蓝牙 A2DP，实车恒为 true。
-//    ✅ 车机互联通道：元数据保持 vivo i(Z) 那套（歌名/歌手/专辑），歌词只走 LYRICS_WHOLE；
-//       逐句事件直接忽略，不覆盖 TITLE/ARTIST，也不刷新 metadata。
-//    ✅ 非车机通道：沿用上游逐句蓝牙歌词（vivo h(String)：TITLE=歌词行、ARTIST=歌名 - 歌手）。
+// 1) 这台车机对第三方 APP 走通用映射，元数据实际只读三个槽：
+//      标题槽   <- android.media.metadata.DISPLAY_TITLE
+//      副标题槽 <- android.media.metadata.ALBUM      （探针中 A:/DS:/G:/T/L/E 标记全部未显示）
+//      歌词槽   <- ucar.media.metadata.LYRICS_WHOLE  （带时间戳 LRC，车机自行滚动，已实车验证正常）
+//    协议 Page 17 标准字段表里并没有 METADATA_KEY_ALBUM，vivo 官方 APP 之所以能显示歌手，
+//    是因为它走系统级 MediaBrowserService 绑定（clientPackageName 白名单）。
+//    salt.5 补的绑定服务实测没有改变这台车机的槽位映射，故不再依赖「判通道」来决定写什么。
 //
-// 2) 字段严格照搬 vivo 官方（反编译确认，vivo 全 APK 不含任何 UCAR 字符串）：
-//    DISPLAY_TITLE=歌名 / DISPLAY_SUBTITLE=歌手 / GENRE=歌名 / ARTIST=歌手 / ALBUM=专辑
-//    / LYRICS_WHOLE=整首 LRC / extras.LYRIC_IS_ALLOWED=true。
-//    ❌ 不写 UCAR_TITLE / UCAR_ARTIST（协议 Page 18 有定义，但 vivo 这个 APP 未实现，实车也不生效）。
+// 2) 因此副标题槽直接写歌手名：ALBUM = track.artist。
+//    代价：仪表第二行也随之显示歌手而非专辑（该槽同样读 ALBUM，无法拆开）。
+//    ❗ updateTitles 绝不能再写 ALBUM，否则逐句事件会把歌手覆盖回专辑。
+//
+// 3) 两套歌词靠字段天然隔离，不需要任何通道判断：
+//      车机：LYRICS_WHOLE 整首 LRC（车机按进度滚动）
+//      蓝牙：TITLE = 当前歌词行、ARTIST = "歌名 - 歌手"（上游 JS 已实现，车机不读这两个槽）
+//    ❌ 不再用 isBluetoothA2dpOn()（车机互联本身就走 A2DP，实车恒 true）；
+//    ❌ 不再用 MediaBrowserService 绑定状态做分流（实测车机未按预期绑定）。
+//
+// 4) 字段其余部分照搬 vivo 官方 i(Z)：
+//    DISPLAY_TITLE=歌名 / DISPLAY_SUBTITLE=歌手 / GENRE=歌名 / LYRIC_IS_ALLOWED=true。
+//    ❌ 不写 UCAR_TITLE / UCAR_ARTIST（vivo 全 APK 无此字符串，实车无效）；
 //    ❌ 不写 LYRICS_LINE / LYRICS_STATUS / extras.LYRIC / 0.8M 截断 / 标准 LYRICS。
 //
-// 3) 封面异步加载修复：fork 原版 updateArtwork() 用全新 Builder 整条替换 metadata，
-//    会把切歌时写入的车机字段全部冲掉；改为基于 prevMetadata 增量更新。
-// ==============================================================================
+// 5) 封面异步加载修复：fork 原版 updateArtwork() 用全新 Builder 整条替换 metadata，
+//    会把切歌时写入的车机字段全部冲掉；改为基于 prevMetadata 增量更新（salt.5 实车已验证有效）。
+// =================================================================================
 const patchs = [
-  // ① updateMetadata：vivo b() + i(true)
+  // ① updateMetadata：副标题槽(ALBUM)写歌手，其余照搬 vivo
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
     '        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();\n        prevMetadata = metadata;',
     `        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();
+        metadata.putString("android.media.metadata.ALBUM", track.artist);
         metadata.putString("android.media.metadata.DISPLAY_TITLE", track.title);
         metadata.putString("android.media.metadata.DISPLAY_SUBTITLE", track.artist);
         metadata.putString("android.media.metadata.GENRE", track.title);
@@ -45,7 +52,7 @@ const patchs = [
         session.setExtras(allowed);
         prevMetadata = metadata;`,
   ],
-  // ② updateTitles：按 uCar 绑定来源分流（不再用 A2DP）
+  // ② updateTitles：不再判通道；整首歌词走 LYRICS_WHOLE，逐句只写 TITLE/ARTIST，绝不碰 ALBUM
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
     `    public void updateTitles(Bundle data) {
@@ -67,29 +74,16 @@ const patchs = [
     }`,
     `    public void updateTitles(Bundle data) {
       if (prevMetadata == null) return;
-      boolean hasWholeLyric = data.containsKey("lyric");
-      if (hasWholeLyric) {
+      if (data.containsKey("lyric")) {
         prevMetadata.putString("ucar.media.metadata.LYRICS_WHOLE", data.getString("lyric"));
       }
-
-      if (MusicService.carUcarBound) {
-        // uCar 车机互联：歌词只要整首 LYRICS_WHOLE；逐句事件忽略，
-        // 不覆盖 TITLE/ARTIST、不 setMetadata，避免把歌名歌手刷成蓝牙歌词
-        if (hasWholeLyric) session.setMetadata(prevMetadata.build());
-        updatePlaybackState(manager.getPlayback());
-        return;
-      }
-
-      // 非车机（普通蓝牙/本地）：沿用上游逐句蓝牙歌词
       if (data.containsKey("title")) {
         prevMetadata.putString(METADATA_KEY_TITLE, data.getString("title"));
       }
       if (data.containsKey("artist")) {
         prevMetadata.putString(METADATA_KEY_ARTIST, data.getString("artist"));
       }
-      if (data.containsKey("album")) {
-        prevMetadata.putString(METADATA_KEY_ALBUM, data.getString("album"));
-      }
+      // 不写专辑字段：副标题槽固定为歌手，逐句事件不能覆盖回专辑
       session.setMetadata(prevMetadata.build());
       updatePlaybackState(manager.getPlayback());
     }`,
@@ -126,15 +120,14 @@ const patchs = [
     `import android.os.IBinder;
 import android.support.v4.media.session.MediaSessionCompat;`,
   ],
-  // ⑥ MusicService：暴露 session token 与 uCar 绑定状态给 CarMediaBrowserService
+  // ⑥ MusicService：暴露 session token 给 CarMediaBrowserService（仅用于协议绑定，不作分流判据）
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/MusicService.java',
     `    MusicManager manager;
     Handler handler;`,
     `    MusicManager manager;
     Handler handler;
-    public static volatile MediaSessionCompat.Token carSessionToken = null;
-    public static volatile boolean carUcarBound = false;`,
+    public static volatile MediaSessionCompat.Token carSessionToken = null;`,
   ],
   // ⑦ MusicService：创建播放会话后记录 token
   [

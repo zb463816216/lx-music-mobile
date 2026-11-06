@@ -19,6 +19,9 @@ import java.util.List;
  *
  * 本服务不新建 MediaSession，而是通过 MusicService 暴露的 token 复用现有播放会话，
  * 车机拿到 MediaController 后即可读到 MetadataManager 写入的全部元数据（含 uCar 扩展字段）。
+ *
+ * 注：salt.5 曾把「是否发生本服务绑定」当作通道判据，实车未见车机绑定、分流未生效；
+ * salt.6 起字段分流不再依赖绑定状态，本服务仅保留协议要求的绑定能力。
  */
 public class CarMediaBrowserService extends MediaBrowserServiceCompat {
 
@@ -45,22 +48,13 @@ public class CarMediaBrowserService extends MediaBrowserServiceCompat {
 
     @Override
     public BrowserRoot onGetRoot(String clientPackageName, int clientUid, Bundle rootHints) {
-        // 通道判据：发生 MediaBrowserService 绑定即为车机互联；普通蓝牙不会走这条路。
-        // 协议 Page 4 允许用 rootHints 的 UCAR 标识进一步区分，但 vivo 车机实测只按
-        // clientPackageName 判来源、未携带该标识，故以绑定本身为准。
-        MusicService.carUcarBound = true;
+        // 协议 Page 4：始终返回非 null BrowserRoot。绑定状态不再用于字段分流。
         // 播放服务可能在绑定之后才启动，此时补挂一次 token
         attachSession();
 
         Bundle extras = new Bundle();
         extras.putBoolean("android.media.browse.SEARCH_SUPPORTED", true);
         return new BrowserRoot(ROOT_ID, extras);
-    }
-
-    @Override
-    public void onDestroy() {
-        MusicService.carUcarBound = false;
-        super.onDestroy();
     }
 
     @Override
