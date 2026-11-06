@@ -9,11 +9,13 @@ const rootPath = path.join(__dirname, './')
 // 依据：vivo 开发者在线文档「媒体应用接入标准」= 本地 ICCOA 1.0.16 PDF（字段集合零差异）
 //   + vivo 官方 i 音乐 APK 反编译（manager.j / MediaSessionService / car.mediasession.utils）
 //
-// 用户实测纠正（salt.6/7 的错误，本版全部改掉）：
-//   ❌ 把 android.media.metadata.ALBUM 写成歌手 —— 篡改字段语义、专辑信息丢失，且效果仍不对。
-//      本版 ALBUM 交还 track.toMediaMetadata()，保持专辑名。
-//   ❌ updateTitles 把逐句歌词写进 METADATA_KEY_TITLE —— 蓝牙歌词一开，标题就被刷成歌词行。
-//      本版逐句歌词只写 LYRICS_LINE，updateTitles 完全不碰 TITLE/ARTIST/ALBUM。
+// ★ salt.11 关键修正（文档「注册媒体会话」第 414 行）：
+//   MediaSessionCompat 必须在 MediaBrowserService.onCreate() 里创建并 setSessionToken()。
+//   旧实现从播放服务「借」token，而车机常在手机刚连接、APP 尚未播放时绑定，
+//   此时 token 为空 → 车机拿不到会话 → 当作普通音源 → 所有 uCar 字段/媒体树/队列都不被读取。
+//   现由 CarMediaBrowserService.getOrCreateSession() 持有会话，播放服务反射复用同一实例（补丁⑨），
+//   车机无论何时绑定都拿到持有完整 metadata / queue / callback 的会话。
+//   [车机] 标题前缀是绑定可见标记：车机真绑定了才会出现，确认后下一版移除。
 //
 // 按协议给值（vivo 在线文档 Page 18 / PDF Page 18）：
 //   UCAR_TITLE   车机专用标题，车机优先使用，不存在才回落 METADATA_KEY_TITLE
@@ -34,10 +36,12 @@ const patchs = [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
     '        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();\n        prevMetadata = metadata;',
     `        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();
+        carTitle = track.title;
         // uCar 专用标题/歌手：车机优先读这两个，逐句歌词不会再改动标题
         metadata.putString("ucar.media.metadata.UCAR_TITLE", track.title);
         metadata.putString("ucar.media.metadata.UCAR_ARTIST", track.artist);
-        metadata.putString("android.media.metadata.DISPLAY_TITLE", track.title);
+        metadata.putString("android.media.metadata.DISPLAY_TITLE",
+                (com.guichaguri.trackplayer.service.MusicService.carBrowserBound ? "[车机]" : "") + track.title);
         metadata.putString("android.media.metadata.DISPLAY_SUBTITLE", track.artist);
         metadata.putString("android.media.metadata.GENRE", track.title);
         // ALBUM 保持 track.toMediaMetadata() 写入的专辑名，不再改写
@@ -46,7 +50,6 @@ const patchs = [
           metadata.putLong("ucar.media.metadata.LYRICS_STATUS", 0L);
         }
         // ICCOA Page 18/19：车机靠这些字段「是否存在」判断显示 VIP / 收藏 / 点赞 / 播放模式按钮
-        // （vivo 官方 APK 同样只写字段、不调 addCustomAction）
         metadata.putString("ucar.media.metadata.FAVORITE_STATE", "0");
         metadata.putString("ucar.media.metadata.COLLECT_STATE", "0");
         metadata.putString("ucar.media.metadata.VIP", "0");
@@ -99,6 +102,10 @@ const patchs = [
         // 否则蓝牙歌词一开，车机标题就会被刷成歌词行
         prevMetadata.putString("ucar.media.metadata.LYRICS_LINE", data.getString("title"));
       }
+      // 绑定可见标记：逐句事件重建 metadata 时也要保留前缀
+      if (com.guichaguri.trackplayer.service.MusicService.carBrowserBound) {
+        prevMetadata.putString("android.media.metadata.DISPLAY_TITLE", "[车机]" + carTitle);
+      }
       // 不写 TITLE / ARTIST / ALBUM：歌名歌手由 UCAR_* / DISPLAY_* 固定，专辑保持原值
       session.setMetadata(prevMetadata.build());
       updatePlaybackState(manager.getPlayback());
@@ -136,16 +143,17 @@ const patchs = [
     `import android.os.IBinder;
 import android.support.v4.media.session.MediaSessionCompat;`,
   ],
-  // ⑥ MusicService：暴露 session token 给 CarMediaBrowserService
+  // ⑥ MusicService：静态桥接字段（token 保留兼容，carBrowserBound 供绑定标记使用）
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/MusicService.java',
     `    MusicManager manager;
     Handler handler;`,
     `    MusicManager manager;
     Handler handler;
-    public static volatile MediaSessionCompat.Token carSessionToken = null;`,
+    public static volatile MediaSessionCompat.Token carSessionToken = null;
+    public static volatile boolean carBrowserBound = false;`,
   ],
-  // ⑦ MusicService：创建播放会话后记录 token
+  // ⑦ MusicService：创建播放会话后记录 token（兼容保留）
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/MusicService.java',
     `        manager = new MusicManager(this);
@@ -164,6 +172,36 @@ import android.support.v4.media.session.MediaSessionCompat;`,
         pb.setActions(actions);
         pb.setActiveQueueItemId(0);
         pb.setState(playback.getState(), playback.getPosition(), playback.getRate());`,
+  ],
+  // ⑨ MetadataManager：复用 MediaBrowserService 持有的会话（文档第 414 行）
+  [
+    'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
+    `        this.session = new MediaSessionCompat(service, "TrackPlayer", null, null);
+
+        session.setFlags(MediaSessionCompat.FLAG_HANDLES_QUEUE_COMMANDS);
+        session.setCallback(new ButtonEvents(service, manager));`,
+    `        MediaSessionCompat carShared = null;
+        try {
+            java.lang.Class<?> carCls = java.lang.Class.forName("com.salt.music.CarMediaBrowserService");
+            carShared = (MediaSessionCompat) carCls
+                    .getMethod("getOrCreateSession", android.content.Context.class)
+                    .invoke(null, service);
+        } catch (java.lang.Throwable ignored) {}
+        this.session = carShared != null
+                ? carShared
+                : new MediaSessionCompat(service, "TrackPlayer", null, null);
+
+        session.setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS
+                | MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
+                | MediaSessionCompat.FLAG_HANDLES_QUEUE_COMMANDS);
+        session.setCallback(new ButtonEvents(service, manager));`,
+  ],
+  // ⑩ MetadataManager：保存歌名，供逐句事件重建标题前缀
+  [
+    'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
+    '    private MediaMetadataCompat.Builder prevMetadata = null;',
+    `    private MediaMetadataCompat.Builder prevMetadata = null;
+    private String carTitle = "";`,
   ],
 ]
 
