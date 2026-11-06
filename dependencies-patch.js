@@ -71,7 +71,8 @@ const patchs = [
         m.putString(K_COMPOSER,            "M_COMPOSER");
         m.putString(K_GENRE,              "M_GENRE");
         m.putString(K_DATE,               "M_DATE");
-        m.putString(K_YEAR,               "M_YEAR");
+        // 注意：METADATA_KEY_YEAR / DURATION / TRACK_NUMBER / NUM_TRACKS / DISC_NUMBER / BT_FOLDER_TYPE
+        // 为 Long 数字类型，禁止 putString，故不纳入字符串喷射（避免 IllegalArgumentException 崩溃）。
         m.putString(K_DISPLAY_TITLE,       "M_DISPLAY_TITLE");
         m.putString(K_DISPLAY_SUBTITLE,    "M_DISPLAY_SUBTITLE");
         m.putString(K_DISPLAY_DESCRIPTION, "M_DISPLAY_DESC");
