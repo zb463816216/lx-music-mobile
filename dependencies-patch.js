@@ -5,45 +5,50 @@ const path = require('node:path')
 
 const rootPath = path.join(__dirname, './')
 
-// ============================ 车机接入：按 ICCOA 1.0.16 补齐播放队列与页面数据 ============================
-// 根因（PDF Page 10 / 14 + vivo 官方 APK 反编译实证）：
-//   车机播放器页的「副标题」读的是**播放队列项/媒体项的 MediaDescription.setSubtitle()**，
-//   不是 MediaSession metadata 的槽位。vivo 的歌曲项与 QueueItem 都是
-//   setTitle(歌名) + setSubtitle(歌手)，且车机一绑定 onGetRoot 就立刻 session.setQueue()。
-//   本 fork 其实自带 Track.toQueueItem()（subtitle=artist、iconUri=artwork），
-//   但**全工程从未调用 session.setQueue()**，是死代码；车机拿不到队列，
-//   只能回落到 metadata 的 ALBUM（专辑），于是副标题一直显示专辑。
+// ============================ 车机接入：按 ICCOA 1.0.16 用协议字段，不篡改标准字段 ============================
+// 依据：vivo 开发者在线文档「媒体应用接入标准」= 本地 ICCOA 1.0.16 PDF（字段集合零差异）
+//   + vivo 官方 i 音乐 APK 反编译（manager.j / MediaSessionService / car.mediasession.utils）
 //
-// 本补丁按协议补上：
-//   ① 切歌时 session.setQueue()，队列项副标题=歌手（PDF Page 14）
-//   ⑧ PlaybackState 标记 activeQueueItemId，让车机把队列项与当前播放关联
-//   配合 CarMediaBrowserService 提供真实媒体树 / 搜索 / MediaItem 副标题（PDF Page 4-11）
+// 用户实测纠正（salt.6/7 的错误，本版全部改掉）：
+//   ❌ 把 android.media.metadata.ALBUM 写成歌手 —— 篡改字段语义、专辑信息丢失，且效果仍不对。
+//      本版 ALBUM 交还 track.toMediaMetadata()，保持专辑名。
+//   ❌ updateTitles 把逐句歌词写进 METADATA_KEY_TITLE —— 蓝牙歌词一开，标题就被刷成歌词行。
+//      本版逐句歌词只写 LYRICS_LINE，updateTitles 完全不碰 TITLE/ARTIST/ALBUM。
 //
-// 元数据部分保持前几轮实车验证有效的结论：
-//   DISPLAY_TITLE=歌名 / DISPLAY_SUBTITLE=歌手 / GENRE=歌名 / ALBUM=歌手（通用槽位兜底），
-//   歌词只走 ucar.media.metadata.LYRICS_WHOLE（带时间戳 LRC，车机自行滚动），
-//   updateArtwork 基于 prevMetadata 增量更新（否则封面异步加载会冲掉全部字段）。
-//   updateTitles 绝不写 ALBUM，避免逐句事件把副标题覆盖回专辑。
-// ❌ 不再用 A2DP / MediaBrowserService 绑定状态做分流（两者实车都判不准）；
-// ❌ 不写 UCAR_TITLE/UCAR_ARTIST（vivo APK 无此字符串）/ LYRICS_LINE / 标准 LYRICS 等未验证字段。
-// ======================================================================================================
+// 按协议给值（vivo 在线文档 Page 18 / PDF Page 18）：
+//   UCAR_TITLE   车机专用标题，车机优先使用，不存在才回落 METADATA_KEY_TITLE
+//   UCAR_ARTIST  车机专用艺术家，车机优先使用，不存在才回落 METADATA_KEY_ARTIST
+//   → 这两个字段固定为歌名/歌手，逐句事件再也不会影响车机标题。
+//   LYRICS_STATUS 歌词状态（Long，0=成功）；协议明确「不存在则视为不支持歌词」。
+//
+// 其余按文档/实证保留：
+//   DISPLAY_TITLE=歌名 / DISPLAY_SUBTITLE=歌手 / GENRE=歌名（vivo i(Z) 写法）
+//   LYRICS_WHOLE=整首带时间戳 LRC（车机自行滚动，实车已验证）
+//   setQueue + setQueueTitle + setActiveQueueItemId（Page 14 播放队列），
+//   队列项 MediaDescription 的 setSubtitle=歌手（Page 10，vivo 实证）
+//   updateArtwork 基于 prevMetadata 增量更新（否则封面异步加载冲掉全部字段）
+// ==========================================================================================================
 const patchs = [
-  // ① updateMetadata：字段 + 播放队列（关键：车机播放页副标题来自 QueueItem 的 subtitle）
+  // ① updateMetadata：协议字段 + 专辑保持原值 + 播放队列
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
     '        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();\n        prevMetadata = metadata;',
     `        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();
-        metadata.putString("android.media.metadata.ALBUM", track.artist);
+        // uCar 专用标题/歌手：车机优先读这两个，逐句歌词不会再改动标题
+        metadata.putString("ucar.media.metadata.UCAR_TITLE", track.title);
+        metadata.putString("ucar.media.metadata.UCAR_ARTIST", track.artist);
         metadata.putString("android.media.metadata.DISPLAY_TITLE", track.title);
         metadata.putString("android.media.metadata.DISPLAY_SUBTITLE", track.artist);
         metadata.putString("android.media.metadata.GENRE", track.title);
+        // ALBUM 保持 track.toMediaMetadata() 写入的专辑名，不再改写
         if (track.lyric != null) {
           metadata.putString("ucar.media.metadata.LYRICS_WHOLE", track.lyric);
+          metadata.putLong("ucar.media.metadata.LYRICS_STATUS", 0L);
         }
         android.os.Bundle allowed = new android.os.Bundle();
         allowed.putBoolean("music.media.extras.LYRIC_IS_ALLOWED", true);
         session.setExtras(allowed);
-        // ICCOA Page 14：下发播放队列；QueueItem 的 subtitle 即歌手，车机播放页据此显示
+        // ICCOA Page 14：播放队列；QueueItem 的 MediaDescription.setSubtitle 即歌手
         android.support.v4.media.MediaDescriptionCompat.Builder qdesc = new android.support.v4.media.MediaDescriptionCompat.Builder();
         qdesc.setMediaId("0");
         qdesc.setTitle(track.title);
@@ -52,9 +57,10 @@ const patchs = [
         java.util.List<android.support.v4.media.session.MediaSessionCompat.QueueItem> carQueue = new java.util.ArrayList<>();
         carQueue.add(new android.support.v4.media.session.MediaSessionCompat.QueueItem(qdesc.build(), 0));
         session.setQueue(carQueue);
+        session.setQueueTitle("播放队列");
         prevMetadata = metadata;`,
   ],
-  // ② updateTitles：整首歌词走 LYRICS_WHOLE；逐句只写 TITLE/ARTIST；绝不碰 ALBUM
+  // ② updateTitles：只更新歌词，绝不触碰标准标题/歌手/专辑字段
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
     `    public void updateTitles(Bundle data) {
@@ -78,14 +84,14 @@ const patchs = [
       if (prevMetadata == null) return;
       if (data.containsKey("lyric")) {
         prevMetadata.putString("ucar.media.metadata.LYRICS_WHOLE", data.getString("lyric"));
+        prevMetadata.putLong("ucar.media.metadata.LYRICS_STATUS", 0L);
       }
       if (data.containsKey("title")) {
-        prevMetadata.putString(METADATA_KEY_TITLE, data.getString("title"));
+        // 逐句歌词走 uCar 单句字段（vivo v() 做法），不再写标准标题字段，
+        // 否则蓝牙歌词一开，车机标题就会被刷成歌词行
+        prevMetadata.putString("ucar.media.metadata.LYRICS_LINE", data.getString("title"));
       }
-      if (data.containsKey("artist")) {
-        prevMetadata.putString(METADATA_KEY_ARTIST, data.getString("artist"));
-      }
-      // 不写专辑字段：副标题槽固定为歌手，逐句事件不能覆盖回专辑
+      // 不写 TITLE / ARTIST / ALBUM：歌名歌手由 UCAR_* / DISPLAY_* 固定，专辑保持原值
       session.setMetadata(prevMetadata.build());
       updatePlaybackState(manager.getPlayback());
     }`,
@@ -140,7 +146,7 @@ import android.support.v4.media.session.MediaSessionCompat;`,
         handler = new Handler();
         carSessionToken = manager.getMetadata().getSession().getSessionToken();`,
   ],
-  // ⑧ updatePlaybackState：把当前队列项标为活动项，车机才能把队列与正在播放关联起来
+  // ⑧ updatePlaybackState：把当前队列项标为活动项
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
     `        PlaybackStateCompat.Builder pb = new PlaybackStateCompat.Builder();
