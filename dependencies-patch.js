@@ -9,20 +9,21 @@ const rootPath = path.join(__dirname, './')
 // true  = 诊断模式：把所有元数据字段写成各自的「字段名标记」，用于确定车机投屏卡片
 //         第二行到底读的是哪个字段。
 // false = 正常模式：走 uCar/CarLife 语义正确方案（歌手位 = artist，绝不污染专辑位），
-//         并注册 MediaBrowserService 让车机以 uCar 媒体应用身份连接、启用 UCAR_* 私有字段。
+//         并注册 MediaBrowserService（在 onCreate 自行创建+注册共用 MediaSession），
+//         使车机以 uCar 媒体应用身份连接、启用 UCAR_* 私有字段。
 const DIAGNOSTIC = false
 
 // ===== 新增文件（在依赖补丁执行后写入，Gradle 会自动编译 src/main/java 下所有 .java）=====
+// 命名空间说明（基于 CI 实测可见性）：track-player 模块开启了 useAndroidX，AGP 把
+// android.support.v4.media.* 重映射为 androidx 实现，故 MediaSessionCompat / MediaBrowserCompat
+// 用 support 命名空间可见；而 MediaBrowserServiceCompat 及其内部类只能用 androidx 命名空间。
 const createFiles = [
   {
     path: 'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/UCarMediaBrowserService.java',
     content: `package com.guichaguri.trackplayer.service;
 
+import android.content.Context;
 import android.os.Bundle;
-// 命名空间说明（基于 CI 实测可见性）：track-player 模块开启了 useAndroidX，AGP 把
-// android.support.v4.media.* 重映射为 androidx 实现，故以下两个 support 命名空间的类可见；
-// 而 androidx.media.MediaBrowserCompat / androidx.media.session.MediaSessionCompat 直接写反而不可见。
-// MediaBrowserServiceCompat 则只能用 androidx 命名空间（support 版已被移除）。
 import android.support.v4.media.MediaBrowserCompat;
 import androidx.media.MediaBrowserServiceCompat;
 import androidx.media.MediaBrowserServiceCompat.BrowserRoot;
@@ -33,41 +34,40 @@ import java.util.List;
 
 /**
  * uCar / ICCOA 车机投屏适配：声明 MediaBrowserService，使车机以 uCar 媒体应用身份连接，
- * 从而启用 UCAR_* 私有元数据字段（UCAR_ARTIST 优先于 ARTIST / ALBUM，详见 ICCOA 标准 PDF 1.0.16）。
- * 本服务不驱动播放，仅共享 TrackPlayer 的 MediaSession token，让车机读取其元数据。
+ * 从而启用 UCAR_* 私有元数据字段（UCAR_ARTIST 优先于 ARTIST，详见 ICCOA 标准 PDF 1.0.16 第 942-943 行）。
+ *
+ * 关键合规点（PDF 第 122-125、634-648 行）：媒体浏览器服务必须在 onCreate() 中自行创建并注册
+ * MediaSession（setSessionToken）。本服务与播放逻辑共用【同一个】MediaSession 静态单例：
+ *   - 谁先调用 getSession() 谁创建，生命周期绑定到应用上下文，不受任一 Service 启停影响；
+ *   - 彻底消除「车机在 session 创建前连接 → 拿到 null token → 被拒绝」的时序问题。
  */
 public class UCarMediaBrowserService extends MediaBrowserServiceCompat {
 
-    private static MediaSessionCompat.Token sSessionToken = null;
-    private boolean mTokenSet = false;
+    // 与播放共用的单一 MediaSession（由本服务或 MetadataManager 谁先调用谁创建）
+    private static MediaSessionCompat sSession = null;
 
-    /** 由 MetadataManager 在创建 MediaSession 后调用，把播放 session 的 token 共享给本服务 */
-    public static void setToken(MediaSessionCompat.Token token) {
-        sSessionToken = token;
+    /** 取得与播放共用的 MediaSession；若尚未创建则惰性创建（绑定到应用上下文） */
+    public static synchronized MediaSessionCompat getSession(Context appCtx) {
+        if (sSession == null) {
+            sSession = new MediaSessionCompat(appCtx, "TrackPlayer");
+            sSession.setFlags(MediaSessionCompat.FLAG_HANDLES_QUEUE_COMMANDS);
+        }
+        return sSession;
     }
 
     @Override
     public void onCreate() {
         super.onCreate();
-        applyToken();
-    }
-
-    private void applyToken() {
-        if (!mTokenSet && sSessionToken != null) {
-            setSessionToken(sSessionToken);
-            mTokenSet = true;
-        }
+        // 注册 session token：车机连上本服务即可读取共用 MediaSession 的元数据（含 UCAR_*）。
+        // 无论车机在播放前还是播放后连接，都能拿到有效 token。
+        MediaSessionCompat s = getSession(getApplicationContext());
+        setSessionToken(s.getSessionToken());
     }
 
     @Override
     public BrowserRoot onGetRoot(String clientPackageName, int clientUid, Bundle rootHints) {
-        // 车机以 uCar 身份连接时，在 onCreate 之后、读取元数据之前补设置 token
-        applyToken();
-        if (!mTokenSet) {
-            // 极少见：车机在 app 尚未创建 MediaSession 时连接，拒绝连接，不影响播放功能
-            return null;
-        }
-        // 返回根节点，携带标准 extras；uCar 字段由 MediaSession 元数据承载，与浏览树无关
+        // ICCOA 标准第 185 行：应始终返回非 null BrowserRoot，否则车机桌面会拒绝访问内容。
+        // uCar 车机连接时 rootHints 含 "UCAR"=true；此处对一切调用方放行（无受保护内容），最大化兼容性。
         Bundle extras = new Bundle();
         extras.putBoolean("android.media.browse.CONTENT_STYLE_SUPPORTED", true);
         return new BrowserRoot("ucar_media_root", extras);
@@ -75,7 +75,7 @@ public class UCarMediaBrowserService extends MediaBrowserServiceCompat {
 
     @Override
     public void onLoadChildren(String parentId, Result<List<MediaBrowserCompat.MediaItem>> result) {
-        // 不提供浏览树，仅用于让车机识别为媒体应用并读取 MediaSession 元数据
+        // 不提供浏览树：车机音乐卡片由「活动 MediaSession 元数据」驱动，浏览树非必需。
         result.sendResult(new ArrayList<MediaBrowserCompat.MediaItem>());
     }
 }
@@ -163,14 +163,15 @@ const patchs = [
     'import android.support.v4.media.session.MediaSessionCompat;\nimport com.guichaguri.trackplayer.service.UCarMediaBrowserService;\n',
   ],
   // ───────────────────────────────────────────────────────────────
-  // 2) 构造：MediaSession 创建后把 token 共享给 UCarMediaBrowserService（车机 uCar 连接用）
+  // 2) 构造：MediaSession 改为与 UCarMediaBrowserService 共用的单一静态实例
+  //    （由 UCarMediaBrowserService.onCreate 自行创建并 setSessionToken 注册，
+  //     消除「车机在 session 创建前连接 → 拿到 null → 被拒绝」的时序问题）。
   // ───────────────────────────────────────────────────────────────
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
-    '        session.setFlags(MediaSessionCompat.FLAG_HANDLES_QUEUE_COMMANDS);\n',
-    `        session.setFlags(MediaSessionCompat.FLAG_HANDLES_QUEUE_COMMANDS);
-        // uCar: 把播放 session 的 token 共享给 UCarMediaBrowserService，使车机以 uCar 媒体应用身份连接
-        UCarMediaBrowserService.setToken(session.getSessionToken());
+    '        this.session = new MediaSessionCompat(service, "TrackPlayer", null, null);\n',
+    `        // uCar: 与 UCarMediaBrowserService 共用同一个 MediaSession（车机据此识别为 uCar 媒体应用）
+        this.session = UCarMediaBrowserService.getSession(service.getApplicationContext());
 `,
   ],
   // ───────────────────────────────────────────────────────────────
@@ -342,8 +343,8 @@ const patchs = [
       console.error('\n✗ 校验失败：MetadataManager.java 未包含 sprayMetadata，补丁未生效！请检查 dependencies-patch.js 与上游 track-player fork。')
       process.exit(1)
     }
-    if (!patched.includes('UCarMediaBrowserService.setToken')) {
-      console.error('\n✗ 校验失败：MetadataManager.java 未注入 UCarMediaBrowserService.setToken，uCar 注册补丁未生效！')
+    if (!patched.includes('UCarMediaBrowserService.getSession')) {
+      console.error('\n✗ 校验失败：MetadataManager.java 未注入 UCarMediaBrowserService.getSession，uCar 注册补丁未生效！')
       process.exit(1)
     }
     const manifestTxt = (await fs.promises.readFile(manifest)).toString()
