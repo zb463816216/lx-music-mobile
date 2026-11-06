@@ -1,13 +1,8 @@
 package com.salt.music;
 
-import android.app.PendingIntent;
-import android.content.Context;
-import android.content.Intent;
-import android.os.Build;
 import android.os.Bundle;
 import android.support.v4.media.MediaBrowserCompat;
 import android.support.v4.media.MediaDescriptionCompat;
-import android.support.v4.media.MediaMetadataCompat;
 import android.support.v4.media.session.MediaControllerCompat;
 import android.support.v4.media.session.MediaSessionCompat;
 
@@ -19,20 +14,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * ICCOA 智慧车联《媒体应用接入标准 1.0.16》的媒体浏览器服务。
+ * ICCOA 智慧车联《媒体应用接入标准 1.0.16》Page 3-15 的车机媒体应用接入。
  *
- * 关键修正（文档「注册媒体会话」）：MediaSessionCompat 必须由本服务在 onCreate() 里
- * 创建并 setSessionToken()。旧实现从播放服务「借」token，而车机通常在手机刚连接、
- * APP 尚未开始播放时就来绑定，此时 token 为空 —— 车机拿不到会话，会把应用
- * 当作普通音源，之后所有 uCar 字段、媒体树、队列都不被读取。
+ * PDF Page 7「浏览界面示例」：车机把 onLoadChildren 返回的媒体项渲染成
+ * 「封面 + 标题(歌名) + 副标题(歌手)」的列表；Page 11「播放器界面示例」：
+ * 标题/副标题/封面/收藏与播放模式按钮，由 MediaSession 的 Metadata 与状态字段驱动。
  *
- * 现在播放服务通过反射复用同一个 MediaSessionCompat 实例（见 dependencies-patch.js），
- * 因此无论车机何时绑定，拿到的都是持有完整 metadata / queue / callback 的会话。
+ * 本服务不新建 MediaSession，复用 MusicService 现有会话的 token；
+ * Callback / PlaybackState / setQueue 由播放服务侧提供。
  */
 public class CarMediaBrowserService extends MediaBrowserServiceCompat {
-
-    private static final Object LOCK = new Object();
-    private static volatile MediaSessionCompat sharedSession = null;
 
     private static final String ROOT_ID = "SALT_MUSIC_ROOT";
     private static final String FOLDER_PLAYING = "SALT_MUSIC_PLAYING";
@@ -40,60 +31,27 @@ public class CarMediaBrowserService extends MediaBrowserServiceCompat {
     private static final String FOLDER_FAVORITE = "SALT_MUSIC_FAVORITE";
     private static final String ITEM_CURRENT = "SALT_MUSIC_CURRENT";
 
-    /** 供播放服务反射复用；应用模块不能被库模块直接引用，故用反射。 */
-    public static MediaSessionCompat getOrCreateSession(Context context) {
-        synchronized (LOCK) {
-            if (sharedSession == null) {
-                MediaSessionCompat s = new MediaSessionCompat(
-                        context.getApplicationContext(), "SaltCarSession");
-                s.setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS
-                        | MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
-                        | MediaSessionCompat.FLAG_HANDLES_QUEUE_COMMANDS);
-                Intent launch = context.getPackageManager()
-                        .getLaunchIntentForPackage(context.getPackageName());
-                if (launch != null) {
-                    int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-                    if (Build.VERSION.SDK_INT >= 23) flags |= PendingIntent.FLAG_IMMUTABLE;
-                    s.setSessionActivity(PendingIntent.getActivity(context, 0, launch, flags));
-                }
-                sharedSession = s;
-            }
-            return sharedSession;
-        }
-    }
-
     @Override
     public void onCreate() {
         super.onCreate();
-        // 文档第 414 行：在 onCreate() 里注册会话令牌，且只注册一次
+        attachSession();
+    }
+
+    /** setSessionToken 只能成功调用一次，重复调用会抛 IllegalStateException。 */
+    private void attachSession() {
+        MediaSessionCompat.Token token = MusicService.carSessionToken;
+        if (token == null) return;
         try {
-            setSessionToken(getOrCreateSession(this).getSessionToken());
-        } catch (Exception ignored) {
-            // setSessionToken 重复调用等异常不应影响服务启动
+            setSessionToken(token);
+        } catch (IllegalStateException ignored) {
+            // 已在 onCreate 设置过
         }
     }
 
     @Override
     public BrowserRoot onGetRoot(String clientPackageName, int clientUid, Bundle rootHints) {
-        // 车机已绑定：置标记，并在当前元数据上打一个可见标记，便于确认绑定确实发生
-        MusicService.carBrowserBound = true;
-        try {
-            MediaSessionCompat s = getOrCreateSession(this);
-            MediaControllerCompat controller = s.getController();
-            MediaMetadataCompat md = controller.getMetadata();
-            if (md != null) {
-                CharSequence t = md.getText("android.media.metadata.DISPLAY_TITLE");
-                String title = t == null ? "" : t.toString();
-                if (!title.startsWith("[车机]")) {
-                    MediaMetadataCompat.Builder b = new MediaMetadataCompat.Builder(md);
-                    b.putString("android.media.metadata.DISPLAY_TITLE", "[车机]" + title);
-                    s.setMetadata(b.build());
-                }
-            }
-        } catch (Exception ignored) {
-            // 元数据尚未就绪，等播放服务写入
-        }
-
+        // 协议 Page 4/11：始终返回非 null BrowserRoot，并声明支持搜索
+        attachSession();
         Bundle extras = new Bundle();
         extras.putBoolean("android.media.browse.SEARCH_SUPPORTED", true);
         return new BrowserRoot(ROOT_ID, extras);
@@ -107,19 +65,23 @@ public class CarMediaBrowserService extends MediaBrowserServiceCompat {
         b.putString("ucar.media.bundle.FAVORITE_STATE", "0");
         b.putString("ucar.media.bundle.COLLECT_STATE", "0");
         b.putString("ucar.media.bundle.IS_RADIO", "0");
+        // 本项目队列只有当前曲目，单页返回
         b.putBoolean("ucar.media.bundle.HAS_MORE", false);
         b.putInt("ucar.media.bundle.NEXT_PAGE_INDEX", 0);
         b.putInt("ucar.media.bundle.REMAIN_SIZE", 0);
         return b;
     }
 
-    /** 从共享会话的播放队列取当前曲目描述，保证媒体树与播放器页显示同一份数据。 */
+    /** 从播放队列取当前曲目的描述，保证媒体树与播放器页显示同一份数据。 */
     private MediaDescriptionCompat currentDescription() {
+        MediaSessionCompat.Token token = MusicService.carSessionToken;
+        if (token == null) return null;
         try {
-            List<MediaSessionCompat.QueueItem> queue = getOrCreateSession(this).getController().getQueue();
+            MediaControllerCompat controller = new MediaControllerCompat(this, token);
+            List<MediaSessionCompat.QueueItem> queue = controller.getQueue();
             if (queue != null && !queue.isEmpty()) return queue.get(0).getDescription();
         } catch (Exception ignored) {
-            // 播放服务尚未写入队列
+            // 播放服务尚未启动或跨进程异常
         }
         return null;
     }
