@@ -5,114 +5,169 @@ const path = require('node:path')
 
 const rootPath = path.join(__dirname, './')
 
+// ===== 诊断开关 =====
+// true  = 诊断模式：把所有元数据字段写成各自的「字段名标记」，用于确定车机投屏卡片
+//         第二行到底读的是哪个字段。构建后到车上播放任意歌曲，看卡片第二行显示什么字符串，
+//         回报给我即可（例如显示 "M_ALBUM" 说明读 METADATA_KEY_ALBUM；"N_SubText" 说明镜像通知栏 SubText）。
+// false = 正常模式：走 uCar/CarLife 语义正确方案（歌手位 = artist，绝不污染专辑位）。
+const DIAGNOSTIC = true
+
 const patchs = [
   // ───────────────────────────────────────────────────────────────
-  // uCar (ICCOA 智慧车联开放联盟) 车机媒体元数据扩展
-  // Jovi InCar / vivo 等车机遵循该标准，通过 MediaSession 的自定义 key 显示歌词：
-  //   ucar.media.metadata.UCAR_TITLE      标题（车机优先于 METADATA_KEY_TITLE）
-  //   ucar.media.metadata.UCAR_ARTIST     艺术家
-  //   ucar.media.metadata.LYRICS_WHOLE    整首歌词（LRC，推荐）
-  //   ucar.media.metadata.LYRICS_STATUS    歌词状态 0成功/1无/2加载中/3失败
-  // 标题/艺术家由 track 自带，始终写入；整首歌词来自 JS 传入的 lyric 字段
-  // （「车载歌词」或「显示完整蓝牙歌词」开启时，playList.ts 把整首 lrc 作为 lyric 传下来）。
-  // ① 切歌 / 整曲元数据：updateMetadata
-  // 反编译旧版 APK 确认：UCAR_TITLE=纯歌名（不拼歌手）、UCAR_ARTIST=歌手、LYRICS_WHOLE=整首LRC。
-  // 车机把 UCAR_TITLE(歌名) + 标准METADATA_KEY_ARTIST(歌手) 拼成一行显示「歌名 - 歌手」，不重复。
+  // 0) 注入：所有元数据字段的规范变量名（Android 标准 + uCar 私有 + 通知栏）
+  //    + 诊断喷射方法 sprayMetadata()。集中定义便于核对 / 后续单独适配车型。
+  //    来源：Android MediaMetadataCompat 标准字段 + ICCOA/uCar 私有字段（PDF 1.0.16 第 870–969 行）
+  // ───────────────────────────────────────────────────────────────
+  [
+    'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
+    '    private Bitmap prevArtResource = null;\n',
+    `    private Bitmap prevArtResource = null;
+
+    // ───────────────────────────────────────────────────────────────
+    // 元数据字段规范变量名（集中定义：Android 标准 + ICCOA/uCar 私有 + 通知栏 MediaStyle）
+    // 车机读取规则见 ICCOA/uCar 标准（PDF 1.0.16）：标准字段走 MediaMetadataCompat，
+    // uCar 私有字段前缀 ucar.media.metadata.，车机优先于同名标准字段。
+    // ───────────────────────────────────────────────────────────────
+    // —— Android 标准 MediaMetadataCompat 字段（前缀 android.media.metadata.）——
+    private static final String K_TITLE                = "android.media.metadata.TITLE";
+    private static final String K_ARTIST               = "android.media.metadata.ARTIST";
+    private static final String K_ALBUM                = "android.media.metadata.ALBUM";
+    private static final String K_ALBUM_ARTIST         = "android.media.metadata.ALBUM_ARTIST";
+    private static final String K_AUTHOR               = "android.media.metadata.AUTHOR";
+    private static final String K_WRITER               = "android.media.metadata.WRITER";
+    private static final String K_COMPOSER             = "android.media.metadata.COMPOSER";
+    private static final String K_GENRE                = "android.media.metadata.GENRE";
+    private static final String K_DATE                 = "android.media.metadata.DATE";
+    private static final String K_YEAR                 = "android.media.metadata.YEAR";
+    private static final String K_DISPLAY_TITLE        = "android.media.metadata.DISPLAY_TITLE";
+    private static final String K_DISPLAY_SUBTITLE     = "android.media.metadata.DISPLAY_SUBTITLE";
+    private static final String K_DISPLAY_DESCRIPTION  = "android.media.metadata.DISPLAY_DESCRIPTION";
+    private static final String K_DISPLAY_ICON_URI     = "android.media.metadata.DISPLAY_ICON_URI";
+    private static final String K_DISPLAY_ICON         = "android.media.metadata.DISPLAY_ICON";
+    private static final String K_MEDIA_ID             = "android.media.metadata.MEDIA_ID";
+    private static final String K_MEDIA_URI            = "android.media.metadata.MEDIA_URI";
+    private static final String K_DURATION             = "android.media.metadata.DURATION";
+    private static final String K_TRACK_NUMBER         = "android.media.metadata.TRACK_NUMBER";
+    private static final String K_NUM_TRACKS           = "android.media.metadata.NUM_TRACKS";
+    private static final String K_DISC_NUMBER          = "android.media.metadata.DISC_NUMBER";
+    private static final String K_BT_FOLDER_TYPE       = "android.media.metadata.BT_FOLDER_TYPE";
+    private static final String K_ART_URI              = "android.media.metadata.ART_URI";
+    private static final String K_ALBUM_ART_URI        = "android.media.metadata.ALBUM_ART_URI";
+    private static final String K_ART                  = "android.media.metadata.ART";
+    private static final String K_ALBUM_ART            = "android.media.metadata.ALBUM_ART";
+    // —— ICCOA/uCar 私有字段（前缀 ucar.media.metadata.，车机优先于同名标准字段）——
+    private static final String U_TITLE                = "ucar.media.metadata.UCAR_TITLE";
+    private static final String U_ARTIST               = "ucar.media.metadata.UCAR_ARTIST";
+    private static final String U_ALBUM                = "ucar.media.metadata.UCAR_ALBUM";
+    // —— 通知栏 MediaStyle 字段（车机卡片可能直接镜像手机通知栏，第 273–275 行设置）——
+    // 诊断标记值统一用字段名本身，便于在车机卡片上肉眼识别。
+    private void sprayMetadata(MediaMetadataCompat.Builder m) {
+        m.putString(K_TITLE,               "M_TITLE");
+        m.putString(K_ARTIST,              "M_ARTIST");
+        m.putString(K_ALBUM,               "M_ALBUM");
+        m.putString(K_ALBUM_ARTIST,        "M_ALBUM_ARTIST");
+        m.putString(K_AUTHOR,              "M_AUTHOR");
+        m.putString(K_WRITER,              "M_WRITER");
+        m.putString(K_COMPOSER,            "M_COMPOSER");
+        m.putString(K_GENRE,              "M_GENRE");
+        m.putString(K_DATE,               "M_DATE");
+        m.putString(K_YEAR,               "M_YEAR");
+        m.putString(K_DISPLAY_TITLE,       "M_DISPLAY_TITLE");
+        m.putString(K_DISPLAY_SUBTITLE,    "M_DISPLAY_SUBTITLE");
+        m.putString(K_DISPLAY_DESCRIPTION, "M_DISPLAY_DESC");
+        // uCar 私有字段
+        m.putString(U_TITLE,               "U_TITLE");
+        m.putString(U_ARTIST,              "U_ARTIST");
+        m.putString(U_ALBUM,               "U_ALBUM");
+    }
+`,
+  ],
+  // ───────────────────────────────────────────────────────────────
+  // 1) updateMetadata（切歌）：写元数据。诊断模式喷射全部字段标记；
+  //    正常模式走 uCar/CarLife 语义正确方案（歌手位=artist，专辑位保持专辑名）。
+  // ───────────────────────────────────────────────────────────────
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
     '        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();\n        prevMetadata = metadata;',
     `        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();
-        // uCar (ICCOA) 媒体元数据（对齐旧版）：标题位纯歌名、歌手位歌手、歌词位整首LRC
-        metadata.putString("ucar.media.metadata.UCAR_TITLE", track.title);
-        metadata.putString("ucar.media.metadata.UCAR_ARTIST", track.artist);
-        // CarLife / 通用车机按 DISPLAY_TITLE=标题行、DISPLAY_SUBTITLE=副标题行（歌手位）显示；
-        // 不写则回退成 METADATA_KEY_ALBUM（专辑），与 vivo/uCar 走 UCAR_ARTIST 是两条独立路径。
-        metadata.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, track.title);
-        metadata.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, track.artist);
-        // METADATA_KEY_ALBUM 保持专辑名（由 track.toMediaMetadata() 写入），仪表盘与投屏卡片的
-        // 「专辑位」都读它，绝不能改写为歌手，否则仪表盘专辑位会被污染。车机卡片第二行（歌手位）
-        // 走 DISPLAY_SUBTITLE(=歌手)，与 ARTIST / UCAR_ARTIST 一致；若个别车机固件仍回退到 ALBUM，
-        // 则需该车型单独适配，不在此全局改写。
-        if (track.lyric != null) {
-          // uCar 协议 Page18：Bundle 上限 1M，歌词超 0.8M 必须截断前段（按 UTF-8 字节）
-          String lrc = track.lyric;
-          try {
-            byte[] bytes = lrc.getBytes("UTF-8");
-            if (bytes.length > 800 * 1024) lrc = new String(bytes, 0, 800 * 1024, "UTF-8");
-          } catch (java.io.UnsupportedEncodingException ignored) { }
-          metadata.putString("ucar.media.metadata.LYRICS_WHOLE", lrc);
-          metadata.putLong("ucar.media.metadata.LYRICS_STATUS", 0L);
-        }
-        prevMetadata = metadata;`,
+        prevMetadata = metadata;
+        if (${DIAGNOSTIC ? 'true' : 'false'}) {
+            // 诊断：把所有文本字段写成各自的字段名标记
+            sprayMetadata(metadata);
+        } else {
+            // 正常：uCar(ICCOA) 媒体元数据 —— 标题位纯歌名、歌手位歌手、歌词位整首LRC
+            metadata.putString(U_TITLE, track.title);
+            metadata.putString(U_ARTIST, track.artist);
+            // CarLife / 通用车机按 DISPLAY_TITLE=标题行、DISPLAY_SUBTITLE=副标题行（歌手位）显示；
+            // 不写则回退成 METADATA_KEY_ALBUM（专辑），与 vivo/uCar 走 UCAR_ARTIST 是两条独立路径。
+            metadata.putString(K_DISPLAY_TITLE, track.title);
+            metadata.putString(K_DISPLAY_SUBTITLE, track.artist);
+            // METADATA_KEY_ALBUM 由 track.toMediaMetadata() 写入，保持专辑名，仪表盘与投屏卡片的
+            // 「专辑位」都读它，绝不能改写为歌手，否则仪表盘专辑位会被污染。
+            if (track.lyric != null) {
+                // uCar 协议 Page18：Bundle 上限 1M，歌词超 0.8M 必须截断前段（按 UTF-8 字节）
+                String lrc = track.lyric;
+                try {
+                    byte[] bytes = lrc.getBytes("UTF-8");
+                    if (bytes.length > 800 * 1024) lrc = new String(bytes, 0, 800 * 1024, "UTF-8");
+                } catch (java.io.UnsupportedEncodingException ignored) { }
+                metadata.putString("ucar.media.metadata.LYRICS_WHOLE", lrc);
+                metadata.putLong("ucar.media.metadata.LYRICS_STATUS", 0L);
+            }
+        }`,
   ],
-  // ② 逐行 / 设置项刷新：updateTitles（完全复刻旧版 r() = updateNowPlayingTitles）
-  // 旧版逻辑：isBluetoothA2dpOn → 找 A2DP 设备 → 新建 Builder → 只写标准字段 → 整条替换。
-  // 不写 ucar 字段（ucar 在切歌时 updateMetadata 写入，逐句被替换后由 updatePlayback 恢复 prevMetadata）。
-  // lyric 字段单独处理：写入 prevMetadata（供 LYRICS_WHOLE 更新）。
-  // 整体替换整个 updateTitles 方法。
+  // ───────────────────────────────────────────────────────────────
+  // 2) 通知栏 MediaStyle 文本（第 273–275 行）：诊断模式喷射标记，
+  //    用于判断车机卡片第二行是否「镜像通知栏 SubText」。
+  // ───────────────────────────────────────────────────────────────
+  [
+    'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
+    '        builder.setContentTitle(track.title);\n        builder.setContentText(track.artist);\n        builder.setSubText(track.album);',
+    `        if (${DIAGNOSTIC ? 'true' : 'false'}) {
+            builder.setContentTitle("N_ContentTitle");
+            builder.setContentText("N_ContentText");
+            builder.setSubText("N_SubText");
+        } else {
+            builder.setContentTitle(track.title);
+            builder.setContentText(track.artist);
+            builder.setSubText(track.album);
+        }`,
+  ],
+  // ───────────────────────────────────────────────────────────────
+  // 3) updateTitles（逐句 / 设置项刷新）：诊断模式不覆盖喷射标记，
+  //    正常模式保留原本逻辑（基于 prevMetadata 增量，uCar 字段不会丢）。
+  // ───────────────────────────────────────────────────────────────
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
     '    public void updateTitles(Bundle data) {\n      if (prevMetadata == null) return;\n      if (data.containsKey("title")) {\n        prevMetadata.putString(METADATA_KEY_TITLE, data.getString("title"));\n      }\n      if (data.containsKey("artist")) {\n        prevMetadata.putString(METADATA_KEY_ARTIST, data.getString("artist"));\n      }\n      if (data.containsKey("album")) {\n        prevMetadata.putString(METADATA_KEY_ALBUM, data.getString("album"));\n      }\n      if (data.containsKey("lyric")) {\n        prevMetadata.putString("android.media.metadata.LYRICS", data.getString("lyric"));\n      }\n      session.setMetadata(prevMetadata.build());\n      updatePlaybackState(manager.getPlayback());\n    }',
     `    public void updateTitles(Bundle data) {
       if (prevMetadata == null) return;
-      // lyric 字段：写入 prevMetadata（LYRICS_WHOLE 更新，不参与逐句替换）
-      if (data.containsKey("lyric")) {
-        // 同样按 uCar 协议做 0.8M UTF-8 截断
-        String lrc = data.getString("lyric");
-        if (lrc != null) {
-          try {
-            byte[] bytes = lrc.getBytes("UTF-8");
-            if (bytes.length > 800 * 1024) lrc = new String(bytes, 0, 800 * 1024, "UTF-8");
-          } catch (java.io.UnsupportedEncodingException ignored) { }
-          prevMetadata.putString("android.media.metadata.LYRICS", lrc);
-          prevMetadata.putString("ucar.media.metadata.LYRICS_WHOLE", lrc);
-        }
+      if (${DIAGNOSTIC ? 'true' : 'false'}) {
+        // 诊断模式：保持喷射标记不被逐句刷新覆盖
         session.setMetadata(prevMetadata.build());
         updatePlaybackState(manager.getPlayback());
         return;
       }
-      // 完全复刻旧版 r()：A2DP 判断 → 新建 Builder → 只写标准字段 → 整条替换
-      android.media.AudioManager am = (android.media.AudioManager) service.getSystemService(android.content.Context.AUDIO_SERVICE);
-      if (am != null && am.isBluetoothA2dpOn()) {
-        android.media.AudioDeviceInfo[] devs = null;
-        if (android.os.Build.VERSION.SDK_INT >= 23) {
-          devs = am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS);
-        }
-        if (devs != null) {
-          for (android.media.AudioDeviceInfo d : devs) {
-            if (d.getType() == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP) {
-              // 基于 prevMetadata 增量更新：复用上一次 updateMetadata 写入的 uCar 专用字段
-              // （UCAR_TITLE / UCAR_ARTIST / LYRICS_WHOLE）。否则车机投屏卡片的「歌手位」会回退成专辑。
-              MediaMetadataCompat.Builder builder = prevMetadata;
-              if (data.containsKey("title")) {
-                builder.putString(METADATA_KEY_TITLE, data.getString("title"));
-                builder.putString("ucar.media.metadata.UCAR_TITLE", data.getString("title"));
-              }
-              if (data.containsKey("artist")) {
-                builder.putString(METADATA_KEY_ARTIST, data.getString("artist"));
-                builder.putString("ucar.media.metadata.UCAR_ARTIST", data.getString("artist"));
-                builder.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, data.getString("artist"));
-              }
-              // METADATA_KEY_ALBUM 保持专辑名（updateMetadata 已写入），不改写为歌手，
-              // 避免污染仪表盘专辑位；歌手位由 DISPLAY_SUBTITLE 承担。
-              if (prevArtwork != null) {
-                builder.putString(METADATA_KEY_ART_URI, prevArtwork.toString());
-              }
-              if (prevArtResource != null) {
-                builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, prevArtResource);
-              }
-              session.setMetadata(builder.build());
-              break;
-            }
-          }
-        }
+      if (data.containsKey("title")) {
+        prevMetadata.putString(METADATA_KEY_TITLE, data.getString("title"));
       }
+      if (data.containsKey("artist")) {
+        prevMetadata.putString(METADATA_KEY_ARTIST, data.getString("artist"));
+      }
+      if (data.containsKey("album")) {
+        prevMetadata.putString(METADATA_KEY_ALBUM, data.getString("album"));
+      }
+      if (data.containsKey("lyric")) {
+        prevMetadata.putString("android.media.metadata.LYRICS", data.getString("lyric"));
+      }
+      session.setMetadata(prevMetadata.build());
       updatePlaybackState(manager.getPlayback());
     }`,
   ],
-  // ③ 封面异步加载：原实现用全新 builder 覆盖整个 metadata，
-  // 会把 ①② 写入的 UCAR_TITLE / LYRICS_WHOLE 全部冲掉（车机歌词随机消失）。
-  // 改为基于 prevMetadata 增量更新。
+  // ───────────────────────────────────────────────────────────────
+  // 4) 封面异步加载：原实现用全新 builder 覆盖整个 metadata，会冲掉喷射字段。
+  //    改为基于 prevMetadata 增量更新（保留 uCar / 诊断标记）。
+  // ───────────────────────────────────────────────────────────────
   [
     'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java',
     '        MediaMetadataCompat.Builder metadata = track.toMediaMetadata();\n\n        metadata.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bitmap);\n        builder.setLargeIcon(bitmap);\n\n        session.setMetadata(metadata.build());',
@@ -132,7 +187,7 @@ const patchs = [
       const file = (await fs.promises.readFile(filePath)).toString()
       if (file.includes(fromStr)) {
         await fs.promises.writeFile(filePath, file.replace(fromStr, toStr))
-      } else if (file.includes('ucar.media.metadata.UCAR_TITLE')) {
+      } else if (file.includes('ucar.media.metadata.UCAR_TITLE') || file.includes('sprayMetadata')) {
         console.log('  已打过补丁，跳过')
       } else {
         // 目标代码未匹配且未打过补丁：通常意味着上游 fork 该段被改动，补丁已失效
@@ -149,8 +204,8 @@ const patchs = [
   const target = path.join(rootPath, 'node_modules/react-native-track-player/android/src/main/java/com/guichaguri/trackplayer/service/metadata/MetadataManager.java')
   try {
     const patched = (await fs.promises.readFile(target)).toString()
-    if (!patched.includes('ucar.media.metadata.UCAR_TITLE')) {
-      console.error('\n✗ 校验失败：MetadataManager.java 未包含 ucar.media.metadata.UCAR_TITLE，uCar 歌词补丁未生效！请检查 dependencies-patch.js 与上游 track-player fork。')
+    if (!patched.includes('sprayMetadata')) {
+      console.error('\n✗ 校验失败：MetadataManager.java 未包含 sprayMetadata，补丁未生效！请检查 dependencies-patch.js 与上游 track-player fork。')
       process.exit(1)
     }
   } catch {
