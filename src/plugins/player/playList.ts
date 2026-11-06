@@ -215,15 +215,13 @@ const updateMetaInfo = async(mInfo: LX.Player.MusicInfo) => {
   state.isPlaying = await TrackPlayer.getState() == State.Playing
   let artwork = isShowNotificationImage ? mInfo.pic ?? prevArtwork : undefined
   if (mInfo.pic) prevArtwork = mInfo.pic
-  let title: string
-  let artist: string
-  if (playerState.lastLyric == null) {
-    title = mInfo.name ?? 'Unknow'
-    artist = mInfo.singer ?? 'Unknow'
-  } else {
-    title = playerState.lastLyric
-    artist = `${mInfo.name}${mInfo.singer ? ` - ${mInfo.singer}` : ''}`
-  }
+  // 投屏 / 通知栏：标题保持为歌名、歌手位保持为纯歌手名（对应 ICCOA 标准的 UCAR_TITLE / UCAR_ARTIST）。
+  // 歌词通过专用通道投屏——TrackPlayer 的 lyric 字段会写入车机 LYRICS_WHOLE（整首），
+  // updateRemoteLyric 负责逐句下发——因此无需再把歌词塞进 title、把「歌名 - 歌手」塞进 artist。
+  // 旧逻辑（lastLyric 不为空时拼接「歌名 - 歌手」到 artist）虽兼容纯蓝牙两行显示，
+  // 却会污染车机投屏卡片的歌手位，与 vivo 音乐等车机的干净展示不一致。
+  const title = mInfo.name ?? 'Unknow'
+  const artist = mInfo.singer ?? 'Unknow'
   await TrackPlayer.updateNowPlayingMetadata({
     title,
     artist,

@@ -73,12 +73,16 @@ const patchs = [
         if (devs != null) {
           for (android.media.AudioDeviceInfo d : devs) {
             if (d.getType() == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP) {
-              MediaMetadataCompat.Builder builder = new MediaMetadataCompat.Builder();
+              // 基于 prevMetadata 增量更新：复用上一次 updateMetadata 写入的 uCar 专用字段
+              // （UCAR_TITLE / UCAR_ARTIST / LYRICS_WHOLE）。否则车机投屏卡片的「歌手位」会回退成专辑。
+              MediaMetadataCompat.Builder builder = prevMetadata;
               if (data.containsKey("title")) {
                 builder.putString(METADATA_KEY_TITLE, data.getString("title"));
+                builder.putString("ucar.media.metadata.UCAR_TITLE", data.getString("title"));
               }
               if (data.containsKey("artist")) {
                 builder.putString(METADATA_KEY_ARTIST, data.getString("artist"));
+                builder.putString("ucar.media.metadata.UCAR_ARTIST", data.getString("artist"));
               }
               if (data.containsKey("album")) {
                 builder.putString(METADATA_KEY_ALBUM, data.getString("album"));
